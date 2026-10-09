@@ -8,7 +8,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
-from . import atalhos, captura, config, winutil
+from . import atalhos, captura, config, recursos, winutil
 from .aviso import mostrar_aviso
 from .dialogos import abrir_configuracoes
 from .sessao import ROTULOS, Sessao
@@ -26,6 +26,10 @@ class App:
 
         self.raiz = tk.Tk()
         self.raiz.report_callback_exception = self._erro_inesperado
+        try:
+            self.raiz.iconbitmap(default=str(recursos.caminho("assets/icone.ico")))
+        except tk.TclError:
+            log.warning("Ícone não encontrado; seguindo sem ele.")
         self._montar()
         self.raiz.update()
         winutil.excluir_da_captura(self.raiz)  # a janela do app não sai nos prints

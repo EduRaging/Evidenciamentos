@@ -50,6 +50,23 @@ dependências (`Pillow` e `reportlab`); precisa de Python 3.10+ e internet nessa
 - O cursor do mouse não aparece nos prints.
 - Um atalho já usado por outro programa não é registrado; o app avisa e você escolhe outro.
 
+## Executável (sem precisar do Python)
+
+Rode `build.bat`. Ele cria um ambiente próprio (`.venv-build`), roda os testes, gera
+`dist\CapturadorEvidencias.exe` (cerca de 20 MB, portátil: basta copiar e dar dois cliques) e
+valida o executável com um autoteste (`CapturadorEvidencias.exe --autoteste resultado.txt`, que
+confere captura, interface, atalhos globais e geração do PDF dentro do próprio `.exe`).
+
+O `.exe` não é assinado digitalmente. Alguns antivírus e o SmartScreen do Windows podem exibir
+um aviso na primeira execução, o que é comum em executáveis novos que capturam a tela.
+
+## Instalador
+
+`installer\Capturador.iss` é o script do instalador (Inno Setup 6): instala só para o usuário
+atual, cria atalho no Menu Iniciar, oferece atalho na Área de Trabalho e iniciar com o Windows, e
+mantém configurações e evidências ao desinstalar. **Ainda não foi compilado nem testado.** Com o
+Inno Setup 6 instalado, o `build.bat` já o detecta e gera `installer_output\Setup_CapturadorEvidencias_<versão>.exe`.
+
 ## Testes
 
 ```bash
