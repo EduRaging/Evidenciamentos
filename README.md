@@ -3,10 +3,19 @@
 Ferramenta para Windows que tira prints e recortes de tela por atalho de teclado e, ao
 final do teste, cria uma pasta com o nome do teste contendo as imagens e um PDF de evidências.
 
-## Como iniciar
+## Como obter e iniciar
 
-Dê dois cliques em `Iniciar.bat`. Na primeira vez ele cria o ambiente (`.venv`) e instala as
-dependências (`Pillow` e `reportlab`); precisa de Python 3.10+ e internet nessa etapa.
+Baixe o repositório (`git clone https://github.com/EduRaging/Evidenciamentos.git` ou *Code → Download ZIP*
+no GitHub). **O `.exe` não vem no repositório**: ele é gerado a partir do código. Há dois caminhos:
+
+| Quero | Faça |
+|---|---|
+| Usar agora, com Python | Dê dois cliques em `Iniciar.bat` |
+| Ter um `.exe` portátil | Dê dois cliques em `build.bat` (veja [Gerar o executável](#gerar-o-executável-exe)) |
+
+Os dois precisam de **Python 3.10+ e internet na primeira vez** (para instalar `Pillow` e
+`reportlab`, e `pyinstaller` no caso do `build.bat`). O `Iniciar.bat` cria o ambiente `.venv` e abre
+o app; nas próximas vezes abre direto.
 
 ## Como usar
 
@@ -50,12 +59,16 @@ dependências (`Pillow` e `reportlab`); precisa de Python 3.10+ e internet nessa
 - O cursor do mouse não aparece nos prints.
 - Um atalho já usado por outro programa não é registrado; o app avisa e você escolhe outro.
 
-## Executável (sem precisar do Python)
+## Gerar o executável (.exe)
 
-Rode `build.bat`. Ele cria um ambiente próprio (`.venv-build`), roda os testes, gera
-`dist\CapturadorEvidencias.exe` (cerca de 20 MB, portátil: basta copiar e dar dois cliques) e
-valida o executável com um autoteste (`CapturadorEvidencias.exe --autoteste resultado.txt`, que
-confere captura, interface, atalhos globais e geração do PDF dentro do próprio `.exe`).
+Rode `build.bat` (precisa de Python 3.10+ e internet, só na máquina que gera). Ele cria um
+ambiente próprio (`.venv-build`), roda os testes, gera `dist\CapturadorEvidencias.exe` e valida o
+executável com um autoteste (`CapturadorEvidencias.exe --autoteste resultado.txt`, que confere
+captura, interface, atalhos globais e geração do PDF dentro do próprio `.exe`).
+
+O `.exe` gerado tem cerca de 20 MB e é portátil: basta copiá-lo para qualquer Windows e dar dois
+cliques, **sem precisar de Python** na máquina onde ele vai rodar. A pasta `dist\` não é versionada
+no Git.
 
 O `.exe` não é assinado digitalmente. Alguns antivírus e o SmartScreen do Windows podem exibir
 um aviso na primeira execução, o que é comum em executáveis novos que capturam a tela.
