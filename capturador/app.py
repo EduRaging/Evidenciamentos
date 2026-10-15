@@ -13,6 +13,7 @@ from . import atalhos, captura, config, recursos, winutil
 from .aviso import mostrar_aviso
 from .dialogo_prompt import abrir_dialogo_prompt
 from .dialogos import abrir_configuracoes
+from .painel_pdfs import PainelPdfs
 from .sessao import ROTULOS, Sessao
 
 log = logging.getLogger(__name__)
@@ -49,12 +50,17 @@ class App:
     def _montar(self) -> None:
         r = self.raiz
         r.title("Capturador de Evidências")
-        r.geometry("500x560")
-        r.minsize(440, 480)
+        r.geometry("560x640")
+        r.minsize(500, 560)
         r.protocol("WM_DELETE_WINDOW", self._ao_fechar)
 
-        quadro = ttk.Frame(r, padding=14)
-        quadro.pack(fill="both", expand=True)
+        self.abas = ttk.Notebook(r)
+        self.abas.pack(fill="both", expand=True)
+        quadro = ttk.Frame(self.abas, padding=14)
+        self.abas.add(quadro, text="Capturar")
+        self.painel_pdfs = PainelPdfs(self.abas, lambda: self.cfg.pasta_base)
+        self.abas.add(self.painel_pdfs, text="PDFs gerados")
+        self.abas.bind("<<NotebookTabChanged>>", lambda _e: self.painel_pdfs.atualizar())
 
         ttk.Label(quadro, text="Nome do teste").pack(anchor="w")
         self.var_nome = tk.StringVar()
@@ -226,6 +232,7 @@ class App:
         self.var_nome.set("")
         self._recarregar_lista()
         self._lembrar_pasta(pasta)
+        self.painel_pdfs.atualizar()
         self._status(f"Pasta criada: {pasta}")
         self._dialogo_concluido(pasta)
         return True

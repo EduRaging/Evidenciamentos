@@ -14,7 +14,8 @@ from pathlib import Path
 
 from PIL import Image, ImageTk
 
-from . import __version__, atalhos, captura, dialogo_prompt, metadados, recursos, winutil
+from . import (__version__, atalhos, captura, dialogo_prompt, metadados, painel_pdfs, recursos,
+               registro_pdfs, winutil)
 from .pdf_relatorio import _registrar_fontes
 from .prompt_ia import Formulario, montar_prompt
 from .sessao import Sessao
@@ -84,6 +85,19 @@ def _prompt_ia() -> str:
     return f"prompt de {len(prompt)} caracteres com PDF e evidências"
 
 
+def _registro_de_pdfs() -> str:
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "base"
+        pasta = _finalizar_exemplo(Path(tmp))
+        (pasta.parent / ".keep").write_text("", encoding="utf-8")  # arquivo solto na base: deve ser ignorado
+        itens = registro_pdfs.listar_pdfs(pasta.parent)
+        if len(itens) != 1 or itens[0].tipo != registro_pdfs.TIPO_EVIDENCIAS:
+            raise AssertionError(f"registro inesperado: {itens}")
+        if not painel_pdfs.PainelPdfs or len(winutil.montar_dropfiles([itens[0].caminho])) <= 20:
+            raise AssertionError("painel ou área de transferência indisponível")
+    return "registro de PDFs, painel e formato de arquivo copiado"
+
+
 def _sessao_e_pdf() -> str:
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -105,6 +119,7 @@ VERIFICACOES = (
     ("atalhos globais", _atalhos_globais),
     ("sessão, pasta e PDF", _sessao_e_pdf),
     ("prompt para IA", _prompt_ia),
+    ("registro de PDFs", _registro_de_pdfs),
 )
 
 

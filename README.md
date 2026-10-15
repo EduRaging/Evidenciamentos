@@ -52,6 +52,28 @@ O atalho aponta para esta pasta; se o projeto for movido, apague-o e rode o `Ini
    O PDF tem uma capa (nome, data, testador, quantidade) e uma evidência por página, com
    data/hora e tipo (tela inteira ou recorte).
 
+## Aba "PDFs gerados"
+
+A segunda aba da janela principal é o **registro dos PDFs** de todos os testes da pasta de
+evidências: os de evidências (gerados ao finalizar) e os relatórios (por exemplo, os que a IA grava
+pela extensão MCP). Do mais recente para o mais antigo, com data, teste, tipo e tamanho. A lista
+se atualiza sozinha enquanto a aba está à vista (a cada ~6 s), então um relatório criado por fora
+aparece sem fazer nada. O campo **Filtrar** ignora acentos e combina palavras ("relatorio despesa").
+
+Selecione um PDF (ou clique com o botão direito) e use:
+
+| Ação | O que faz |
+|---|---|
+| **Abrir (ler)** | abre no leitor de PDF padrão (também com dois cliques ou Enter) |
+| **Mostrar na pasta** | abre o Explorador de Arquivos com o PDF selecionado |
+| **Copiar caminho** | copia o caminho completo como texto |
+| **Copiar arquivo** | copia o **arquivo** (não o texto): cole com Ctrl+V num e-mail, no Teams ou numa pasta |
+| **Salvar cópia…** | grava uma cópia onde você escolher (baixar); o original fica no lugar |
+| **Enviar por e-mail…** | abre uma mensagem nova com assunto e texto prontos e deixa o PDF copiado: cole (Ctrl+V) para anexar |
+
+O padrão de e-mail do Windows (`mailto:`) não permite anexar arquivos, por isso o anexo é feito
+colando o PDF já copiado.
+
 ## Prompt para IA (casos de teste e relatório)
 
 O app não se conecta a nenhuma IA: ele monta um **prompt pronto** para o senhor colar na IA que
