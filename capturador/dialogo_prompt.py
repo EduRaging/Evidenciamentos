@@ -173,6 +173,8 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
 
     def enviar() -> None:
         texto = prompt_atual()
+        var_status.set("Abrindo o Claude…")
+        janela.update_idletasks()
         resultado = claude_desktop.abrir_conversa(texto)
         if resultado == claude_desktop.PREENCHIDO:
             var_status.set("O Claude abriu com o prompt preenchido. Confira e aperte Enter para enviar: "
@@ -183,8 +185,8 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
             var_status.set("O prompt é grande demais para ir no link. O Claude abriu em branco e o prompt "
                            f"está copiado: cole com Ctrl+V.{a_anexar()}{salvo}")
         else:
-            var_status.set("Não encontrei o Claude desktop neste computador. O prompt foi copiado: cole na "
-                           f"IA que preferir.{a_anexar()}{salvo}")
+            var_status.set("Não consegui abrir o Claude desktop (não está instalado ou não iniciou). O prompt "
+                           f"foi copiado: abra o Claude e cole com Ctrl+V.{a_anexar()}{salvo}")
 
     def trocar() -> None:
         escolhida = filedialog.askdirectory(parent=janela, initialdir=pasta_base or None,

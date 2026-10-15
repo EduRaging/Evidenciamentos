@@ -18,6 +18,7 @@ from urllib.parse import quote
 LINK_NOVA_CONVERSA = "claude://claude.ai/new"
 LIMITE_PROMPT = 12_000  # o Claude trunca em ~14 mil; a margem evita cortar o fim do prompt
 LIMITE_LINHA_DE_COMANDO = 30_000  # o Windows aceita 32.767 caracteres numa linha de comando
+ESPERA_DE_FALHA = 2.0  # segundos esperando o processo sair com erro antes de dar o envio por feito
 
 PREENCHIDO = "preenchido"  # a conversa abriu com o prompt na caixa de texto
 VAZIA = "vazia"  # a conversa abriu sem texto (prompt grande demais): cole da área de transferência
@@ -58,6 +59,21 @@ def _dividir(linha: str) -> list[str]:
         kernel32.LocalFree(ctypes.cast(argv, ctypes.c_void_p))
 
 
+def _lancador_atual(exe: Path) -> Path:
+    """Troca o claude.exe de uma pasta de versão pelo lançador da pasta-mãe, quando existir.
+
+    O registro do Windows costuma apontar para uma pasta de versão (…\\app-2.31226.1\\claude.exe)
+    que as atualizações deixam velha ou pela metade: ela abre e fecha na hora (visto aqui, com a
+    pasta sem o icudtl.dat). O claude.exe da pasta-mãe é o lançador do instalador (Squirrel), que
+    sempre abre a versão atual repassando os argumentos.
+    """
+    if exe.parent.name.lower().startswith("app-"):
+        lancador = exe.parent.parent / exe.name
+        if lancador.is_file():
+            return lancador
+    return exe
+
+
 def comando_para_abrir(link: str, linha_registrada: str | None = None,
                        nome_exe: str = "claude.exe") -> list[str] | None:
     """Monta [executável, ...argumentos] que abre `link`, ou None se não achar o Claude desktop.
@@ -73,7 +89,7 @@ def comando_para_abrir(link: str, linha_registrada: str | None = None,
         return None
     if not any("%1" in p for p in partes[1:]):
         return None  # formato desconhecido: sem onde colocar o link
-    comando = [partes[0]] + [p.replace("%1", link) for p in partes[1:]]
+    comando = [str(_lancador_atual(Path(partes[0])))] + [p.replace("%1", link) for p in partes[1:]]
     if sum(len(p) + 1 for p in comando) > LIMITE_LINHA_DE_COMANDO:
         return None
     return comando
@@ -94,9 +110,17 @@ def abrir_conversa(prompt: str | None = None, *, linha_registrada: str | None = 
     if comando is None:
         return INDISPONIVEL
     try:
-        iniciar(comando, close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=0x00000008 | 0x00000200)  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        processo = iniciar(comando, close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL,
+                           creationflags=0x00000008 | 0x00000200)  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     except OSError:
+        return INDISPONIVEL
+    # Quem entrega o link a um Claude já aberto sai com código 0 (e quem inicia um novo segue rodando).
+    # Sair logo com erro é falha de verdade (ex.: versão quebrada): avisar, em vez de "não aconteceu nada".
+    try:
+        codigo = processo.wait(timeout=ESPERA_DE_FALHA) if processo is not None else 0
+    except subprocess.TimeoutExpired:
+        codigo = 0  # continua rodando: o Claude está iniciando
+    if codigo != 0:
         return INDISPONIVEL
     return PREENCHIDO if texto else VAZIA
