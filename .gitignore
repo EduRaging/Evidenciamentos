@@ -13,6 +13,9 @@ build/
 dist/
 installer_output/
 
+# Extensão do Claude desktop gerada (tem dependências compiladas desta máquina)
+*.mcpb
+
 # Dados gerados em uso
 *.log
 

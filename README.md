@@ -162,6 +162,32 @@ Depois, peça algo como: *"Analise o teste mais recente e gere o relatório em P
 `analisar_teste`. Por padrão o servidor lê a pasta de evidências definida nas Configurações do app
 (`CAPTURADOR_PASTA_BASE` a substitui).
 
+### Extensão para o Claude desktop (`.mcpb`), uso pessoal
+
+O botão **+ Adicionar → conector personalizado** do Claude só aceita servidor **remoto com URL
+pública** (o Claude conecta pela nuvem da Anthropic, não pelo seu computador), então não serve
+para ler uma pasta local. O equivalente local é uma **extensão `.mcpb`**: o mesmo servidor, num
+pacote que o Claude desktop instala com dois cliques, sem editar JSON.
+
+```bash
+.venv-build\Scripts\python.exe tools\empacotar_mcpb.py
+```
+
+Gera `dist\CapturadorEvidencias.mcpb` (cerca de 24 MB, com as dependências embutidas). Para
+instalar, dê dois cliques no arquivo: o Claude desktop abre o diálogo de instalação e pergunta a
+**pasta das evidências** (a mesma do app); o Claude só enxerga o que estiver dentro dela. Depois é
+só conversar no chat: *"Analise o teste mais recente e gere o relatório em PDF"*.
+
+- Validado com o validador oficial (`npx @anthropic-ai/mcpb validate`) e executado como processo
+  pelo Python do sistema **sem** o pacote `mcp` instalado
+  (`python tools\testar_mcp.py --bundle <pasta extraída>`).
+- Limitações: só Windows; o pacote carrega dependências compiladas e só roda com a **mesma versão
+  do Python** em que foi empacotado (3.14), então refaça o pacote se o Python mudar; usa o
+  comando `python` do PATH; não é assinado, então o Claude pode exibir um aviso.
+- Se não iniciar, veja `%APPDATA%\Claude\logs\mcp-server-*.log`. Em contas de equipe/empresa, o
+  administrador pode restringir extensões.
+- **Ainda não foi instalado no Claude desktop de verdade.**
+
 **Estado**: protótipo. Testado de ponta a ponta pelo protocolo com um cliente MCP (handshake,
 ferramentas, imagem, PDF, recusa de caminhos fora da pasta), mas **ainda não** com o Claude
 Desktop/Claude Code de verdade, e **não incluído no `.exe`** (um `.exe` sem janela não tem

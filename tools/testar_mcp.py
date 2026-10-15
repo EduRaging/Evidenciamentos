@@ -10,6 +10,10 @@ Uso (com um Python que tenha o pacote mcp: pip install -r requirements-mcp.txt):
     python tools\\testar_mcp.py --criar-exemplo "C:\\caminho\\Evidencias_TESTE"
         Só cria um teste fictício (3 telas de um cadastro de exemplo) nessa pasta, para você
         apontar o servidor para ela ao testar com o Claude de verdade.
+
+    python tools\\testar_mcp.py --bundle "C:\\pasta\\com\\a\\extensao\\descompactada"
+        Testa a EXTENSÃO .mcpb como o Claude desktop a executaria: usa o Python do sistema (sem o
+        pacote mcp instalado) e as dependências embutidas no pacote.
 """
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ import base64
 import io
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -97,7 +102,7 @@ def criar_exemplo(base: Path, config: Path) -> Path:
     return sessao.finalizar("Cadastro de cliente PJ (exemplo)", "Equipe QA", base)
 
 
-async def _autoteste(base: Path, nome: str) -> list[bool]:
+async def _autoteste(base: Path, nome: str, bundle: Path | None = None) -> list[bool]:
     try:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
@@ -110,8 +115,17 @@ async def _autoteste(base: Path, nome: str) -> list[bool]:
         resultados.append(bool(condicao))
         print(("  OK     " if condicao else "  FALHA  ") + descricao)
 
-    params = StdioServerParameters(command=sys.executable, args=[str(RAIZ / "servidor_mcp.py")],
-                                   cwd=str(RAIZ), env={**os.environ, "CAPTURADOR_PASTA_BASE": str(base)})
+    ambiente = {**os.environ, "CAPTURADOR_PASTA_BASE": str(base)}
+    if bundle:
+        # como o host executa a extensão: Python do sistema, sem o mcp instalado nele
+        sistema = Path(sys.base_prefix) / "python.exe"
+        verificacao = subprocess.run([str(sistema), "-c", "import mcp"], capture_output=True)
+        print(f"  (o Python do sistema {'NÃO tem' if verificacao.returncode else 'TEM'} o pacote mcp instalado)")
+        params = StdioServerParameters(command=str(sistema), args=[str(bundle / "server" / "main.py")],
+                                       cwd=str(bundle), env=ambiente)
+    else:
+        params = StdioServerParameters(command=sys.executable, args=[str(RAIZ / "servidor_mcp.py")],
+                                       cwd=str(RAIZ), env=ambiente)
     async with stdio_client(params) as (leitura, escrita):
         async with ClientSession(leitura, escrita) as mcp:
             init = await mcp.initialize()
@@ -156,6 +170,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Testa o servidor MCP de forma isolada.")
     parser.add_argument("--criar-exemplo", metavar="PASTA",
                         help="só cria um teste fictício nessa pasta (para testar com o Claude de verdade)")
+    parser.add_argument("--bundle", metavar="PASTA",
+                        help="testa a extensão .mcpb descompactada nessa pasta, em vez do código-fonte")
     args = parser.parse_args()
 
     if args.criar_exemplo:
@@ -174,7 +190,7 @@ def main() -> int:
         base = tmp / "base"
         nome = criar_exemplo(base, tmp / "cfg").name
         print("Autoteste do servidor MCP (pasta temporária, sem IA e sem tocar nos seus dados):")
-        resultados = asyncio.run(_autoteste(base, nome))
+        resultados = asyncio.run(_autoteste(base, nome, Path(args.bundle) if args.bundle else None))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\n{sum(resultados)}/{len(resultados)} verificações OK")
