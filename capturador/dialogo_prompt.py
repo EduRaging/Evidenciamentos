@@ -6,7 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from . import claude_desktop, metadados
+from . import claude_desktop, extensao_claude, metadados
 from .prompt_ia import SAIDAS, Formulario, montar_prompt
 
 ARQUIVO_PROMPT = "Prompt para IA.txt"
@@ -30,8 +30,8 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
 
     janela = tk.Toplevel(pai)
     janela.title("Preparar prompt para IA")
-    janela.geometry("780x820")
-    janela.minsize(700, 680)
+    janela.geometry("780x760")
+    janela.minsize(700, 700)
     janela.transient(pai)
 
     quadro = ttk.Frame(janela, padding=14)
@@ -44,7 +44,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     var_pdf = tk.BooleanVar(value=True)
     var_sugerir = tk.BooleanVar(value=True)
     var_extensao = tk.BooleanVar(value=True)
-    var_dica = tk.StringVar()
+    var_aviso_extensao = tk.StringVar()
     var_status = tk.StringVar()
 
     # --- teste escolhido
@@ -82,8 +82,6 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
                     variable=var_sugerir).pack(anchor="w", pady=(4, 0))
     ttk.Checkbutton(opcoes, text="Claude com a extensão instalada (ele lê as evidências direto da pasta)",
                     variable=var_extensao).pack(anchor="w", pady=(4, 0))
-    ttk.Label(opcoes, textvariable=var_dica, foreground="#555", wraplength=560, justify="left").pack(
-        anchor="w", padx=(22, 0))
 
     # --- prévia
     ttk.Label(quadro, text="Prévia do prompt (é isto que será enviado ou copiado)").grid(
@@ -91,19 +89,21 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     moldura = ttk.Frame(quadro)
     moldura.grid(row=7, column=0, columnspan=3, sticky="nsew")
     quadro.rowconfigure(7, weight=1)
-    previa = tk.Text(moldura, height=10, wrap="word", font=("Consolas", 9), state="disabled",
+    previa = tk.Text(moldura, height=5, wrap="word", font=("Consolas", 9), state="disabled",
                      background="#f5f5f5", relief="solid", borderwidth=1)
     barra = ttk.Scrollbar(moldura, orient="vertical", command=previa.yview)
     previa.configure(yscrollcommand=barra.set)
     previa.pack(side="left", fill="both", expand=True)
     barra.pack(side="right", fill="y")
 
+    ttk.Label(quadro, textvariable=var_aviso_extensao, foreground="#b00020", wraplength=700,
+              justify="left").grid(row=8, column=0, columnspan=3, sticky="w", pady=(8, 0))
     ttk.Label(quadro, text=AVISO, foreground="#8a4b00", wraplength=700, justify="left").grid(
-        row=8, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        row=9, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
     # --- botões
     rodape = ttk.Frame(quadro)
-    rodape.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+    rodape.grid(row=10, column=0, columnspan=3, sticky="ew", pady=(10, 0))
     botao_enviar = ttk.Button(rodape, text="Enviar ao Claude")
     botao_enviar.pack(side="left", ipady=4, ipadx=8)
     botao_copiar = ttk.Button(rodape, text="Copiar prompt")
@@ -112,7 +112,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     botao_pasta.pack(side="left")
     ttk.Button(rodape, text="Fechar", command=janela.destroy).pack(side="right")
     ttk.Label(quadro, textvariable=var_status, foreground="#1b5e20", wraplength=700,
-              justify="left").grid(row=10, column=0, columnspan=3, sticky="w", pady=(8, 0))
+              justify="left").grid(row=11, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
     # --- lógica
     def formulario() -> Formulario:
@@ -130,6 +130,13 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     def prompt_atual() -> str:
         return montar_prompt(estado["teste"], formulario())
 
+    def problemas_da_extensao() -> list[str]:
+        """O que impediria o Claude de ler este teste pela extensão (vazio se a caixa está desmarcada)."""
+        return extensao_claude.avisos(estado["teste"].pasta) if var_extensao.get() else []
+
+    def atualizar_aviso_extensao(*_args) -> None:
+        var_aviso_extensao.set("\n".join(f"⚠ {p}" for p in problemas_da_extensao()))
+
     def atualizar_previa(*_args) -> None:
         estado["agendado"] = None
         try:
@@ -141,8 +148,6 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
             return  # janela fechada enquanto a atualização estava agendada
         teste = estado["teste"]
         var_titulo.set(f"{teste.nome_teste}  ({len(teste.evidencias)} evidências)")
-        var_dica.set(f'A extensão só enxerga os testes da pasta "{teste.pasta.parent}": é essa a pasta '
-                     "que ela precisa ter configurada." if var_extensao.get() else "")
 
     def agendar(*_args) -> None:
         if estado["agendado"]:
@@ -172,6 +177,13 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
         var_status.set(f"Prompt copiado! Cole na IA.{a_anexar()}{salvo}")
 
     def enviar() -> None:
+        problemas = problemas_da_extensao()
+        atualizar_aviso_extensao()
+        if problemas and not messagebox.askyesno(
+                "A extensão não está pronta",
+                "\n\n".join(problemas) + "\n\nEnviar ao Claude mesmo assim? (Ele provavelmente dirá que não "
+                "consegue ler as evidências.)", icon="warning", default="no", parent=janela):
+            return
         texto = prompt_atual()
         var_status.set("Abrindo o Claude…")
         janela.update_idletasks()
@@ -200,6 +212,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
             return
         var_status.set("")
         atualizar_previa()
+        atualizar_aviso_extensao()
 
     botao_trocar.configure(command=trocar)
     botao_enviar.configure(command=enviar)
@@ -210,10 +223,12 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     var_pdf.trace_add("write", agendar)
     var_sugerir.trace_add("write", agendar)
     var_extensao.trace_add("write", agendar)
+    var_extensao.trace_add("write", atualizar_aviso_extensao)
     for campo in campos.values():
         campo.bind("<KeyRelease>", agendar)
 
     atualizar_previa()
+    atualizar_aviso_extensao()
     janela.update_idletasks()
     janela.focus_force()
     pai.wait_window(janela)

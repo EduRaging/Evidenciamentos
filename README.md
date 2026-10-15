@@ -100,8 +100,11 @@ empresa aprove). Sem chave de API e sem custo, e sem tráfego de rede do app.
    o senhor só confere e aperta Enter (o Claude apenas preenche a caixa; nada sai do computador
    antes disso). Com a extensão do Claude instalada (veja abaixo), a caixa **Claude com a extensão
    instalada** (marcada por padrão) faz o prompt mandar a IA ler as evidências direto da pasta e
-   gravar o PDF lá, sem anexar nada; a janela mostra a pasta que a extensão precisa ter
-   configurada. Sem a extensão, desmarque a caixa: o prompt volta ao formato de anexos.
+   gravar o PDF lá, sem anexar nada. A janela confere, nos arquivos do Claude desktop, se a
+   extensão está instalada, **ativada** (Configurações > Extensões) e lendo a **mesma pasta** do
+   teste; se não estiver, mostra um aviso em vermelho e pergunta antes de enviar (sem isso o
+   Claude responde que não tem as ferramentas). Sem a extensão, desmarque a caixa: o prompt volta
+   ao formato de anexos.
    Se o prompt passar de ~12 mil caracteres (limite do link do Claude) ou o Claude desktop não
    estiver instalado, o app copia o prompt e avisa para colar (Ctrl+V).
    Para outra IA, use **Copiar prompt**, cole e **anexe o PDF** do teste (ele já traz as evidências
