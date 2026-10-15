@@ -59,6 +59,41 @@ class MontarPrompt(unittest.TestCase):
         self.assertNotIn("arquivo PDF para eu baixar", prompt)
         self.assertNotIn("entregar o resultado", prompt)
 
+    def test_sugestoes_de_casos_vem_ligadas_por_padrao(self):
+        prompt = montar_prompt(teste_exemplo(), Formulario())
+        for esperado in ("### Casos de teste sugeridos (não executados)", "ISTQB/BSTQB",
+                         "Partição de equivalência", "Análise de valor limite", "Tabela de decisão",
+                         "Transição de estado", "adivinhação de erros", "teste exploratório", "checklist",
+                         "CS-01", "Não executado - sugerido", "(a confirmar)", "no máximo 10 casos"):
+            with self.subTest(esperado=esperado):
+                self.assertIn(esperado, prompt)
+
+    def test_sugestoes_so_quando_ha_base_e_sem_caixa_branca(self):
+        prompt = montar_prompt(teste_exemplo(), Formulario())
+        self.assertIn("Sem sugestões: as evidências não dão base", prompt)  # não força sugestões
+        self.assertIn("Não proponha técnicas de caixa-branca", prompt)  # o testador só vê a tela
+        self.assertIn("Não afirme regras de negócio", prompt)
+
+    def test_sugestoes_podem_ser_desligadas(self):
+        prompt = montar_prompt(teste_exemplo(), Formulario(sugerir_casos=False))
+        self.assertNotIn("sugeridos (não executados)", prompt)
+        self.assertNotIn("Partição de equivalência", prompt)
+        self.assertNotIn("CS-xx", prompt)
+
+    def test_sugestoes_valem_tambem_para_so_relatorio_e_so_casos(self):
+        for saida in ("casos", "relatorio", "ambos"):
+            with self.subTest(saida=saida):
+                self.assertIn("sugeridos (não executados)", montar_prompt(teste_exemplo(), Formulario(saida=saida)))
+
+    def test_no_relatorio_sugeridos_nao_contam_como_executados(self):
+        ambos = montar_prompt(teste_exemplo(), Formulario(saida="ambos"))
+        self.assertIn("apenas como recomendação de testes adicionais, nunca como executados", ambos)
+
+    def test_sugestoes_tambem_na_variante_mcp(self):
+        prompt = montar_prompt(teste_exemplo(), Formulario(via_mcp=True))
+        self.assertIn("Partição de equivalência", prompt)
+        self.assertIn("`ver_evidencia`", prompt)
+
     def test_variante_mcp_usa_ferramentas_em_vez_de_anexos(self):
         teste = teste_exemplo()
         teste.pasta = Path("C:/base/2026-10-09_1430 - Login no ERP")
@@ -96,9 +131,9 @@ class MontarPrompt(unittest.TestCase):
         self.assertIn(f"Testador: {NAO_INFORMADO}", montar_prompt(teste, Formulario()))
 
     def test_tipos_de_saida(self):
-        casos = montar_prompt(teste_exemplo(), Formulario(saida="casos"))
-        relatorio = montar_prompt(teste_exemplo(), Formulario(saida="relatorio"))
-        ambos = montar_prompt(teste_exemplo(), Formulario(saida="ambos"))
+        casos = montar_prompt(teste_exemplo(), Formulario(saida="casos", sugerir_casos=False))
+        relatorio = montar_prompt(teste_exemplo(), Formulario(saida="relatorio", sugerir_casos=False))
+        ambos = montar_prompt(teste_exemplo(), Formulario(saida="ambos", sugerir_casos=False))
         self.assertIn("### Casos de teste", casos)
         self.assertNotIn("### Relatório de execução", casos)
         self.assertIn("### Relatório de execução", relatorio)

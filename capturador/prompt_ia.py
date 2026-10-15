@@ -42,6 +42,25 @@ Escreva o relatório com estas seções:
 7. Conclusão e recomendação (aprovar, reprovar ou retestar), com justificativa"""
 
 
+_SECAO_SUGESTOES = """\
+### Casos de teste sugeridos (não executados)
+Depois de documentar o que foi executado, sugira casos ADICIONAIS que valha a pena testar, aplicando as técnicas do currículo ISTQB/BSTQB (nível Foundation) que fizerem sentido para o que as evidências mostram. Só sugira quando houver base visível (campos, regras, mensagens, estados ou fluxos); se não houver, escreva "Sem sugestões: as evidências não dão base para propor casos adicionais com segurança" e não force.
+Técnicas a considerar (indique em cada caso qual foi usada):
+- Partição de equivalência: classes válidas e inválidas de cada campo ou entrada.
+- Análise de valor limite: valores nas fronteiras (mínimo, máximo, logo abaixo e logo acima).
+- Tabela de decisão: combinações de condições que levam a resultados diferentes (regras de negócio).
+- Transição de estado: mudanças de estado e transições inválidas (ex.: de Ativo para Inativo).
+- Baseadas em experiência: adivinhação de erros (vazio, só espaços, caracteres especiais, duplicidade, texto muito longo, envio duplo), teste exploratório e checklist.
+- Outras práticas úteis: cenários ou casos de uso de ponta a ponta, teste combinatório (pairwise) quando houver muitas combinações, e perfis ou permissões de acesso.
+Não proponha técnicas de caixa-branca (cobertura de código): o testador só vê a tela.
+Para cada caso sugerido, informe: ID (CS-01, CS-02...), técnica, o que verificar, dados de entrada propostos, resultado esperado (marque "(a confirmar)" se depender de uma regra que você não viu), prioridade (Alta, Média ou Baixa, com uma justificativa curta de risco) e a evidência que motivou a ideia.
+Regras para as sugestões:
+- Separe-as com clareza do que foi executado: o status é sempre "Não executado - sugerido".
+- Não afirme regras de negócio que não aparecem nas evidências; trate-as como hipóteses.
+- Priorize pelo risco (impacto se falhar x chance de falhar) e limite a lista a no máximo 10 casos, em ordem de prioridade.
+- No fim, liste as perguntas que o testador precisa responder para confirmar os resultados esperados."""
+
+
 @dataclass
 class Formulario:
     ambiente: str = ""
@@ -51,6 +70,7 @@ class Formulario:
     saida: str = "ambos"  # chave de SAIDAS
     entregar_pdf: bool = True  # pede à IA o resultado já em arquivo PDF
     via_mcp: bool = False  # a IA usa as ferramentas do servidor MCP em vez de anexos
+    sugerir_casos: bool = True  # pede casos adicionais com técnicas ISTQB/BSTQB, quando houver base
 
 
 def _ou_nao_informado(texto: str) -> str:
@@ -124,8 +144,12 @@ def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
         secoes.append(_SECAO_CASOS)
     if saida in ("relatorio", "ambos"):
         secoes.append(_SECAO_RELATORIO)
+    if form.sugerir_casos:
+        secoes.append(_SECAO_SUGESTOES)
     if saida == "ambos":
-        secoes.append("Faça primeiro os casos de teste e depois o relatório, reaproveitando os mesmos IDs.")
+        secoes.append("Faça primeiro os casos de teste e depois o relatório, reaproveitando os mesmos IDs."
+                      + (" No relatório, trate os casos sugeridos (CS-xx) apenas como recomendação de testes "
+                         "adicionais, nunca como executados." if form.sugerir_casos else ""))
     tarefa = _TAREFAS[saida] + (" e entregar o resultado em um arquivo PDF" if form.entregar_pdf else "")
 
     criterios = form.criterios.strip()

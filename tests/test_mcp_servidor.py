@@ -99,6 +99,11 @@ class FerramentasDoServidor(unittest.TestCase):
                          "Validar o login", "Não invente"):
             self.assertIn(esperado, prompt)
         self.assertNotIn("Anexei", prompt)
+        self.assertIn("sugeridos (não executados)", prompt)  # sugestões ISTQB/BSTQB por padrão
+
+    def test_prompt_mcp_sugestoes_podem_ser_desligadas(self):
+        prompt = self.srv.analisar_teste(self.nome, sugerir_casos=False)
+        self.assertNotIn("sugeridos (não executados)", prompt)
 
 
 if __name__ == "__main__":

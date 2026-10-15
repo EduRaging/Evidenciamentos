@@ -42,6 +42,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     var_ambiente = tk.StringVar()
     var_saida = tk.StringVar(value="ambos")
     var_pdf = tk.BooleanVar(value=True)
+    var_sugerir = tk.BooleanVar(value=True)
     var_status = tk.StringVar()
 
     # --- teste escolhido
@@ -65,12 +66,18 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
         campos[chave] = _campo_texto(quadro, altura)
         campos[chave].grid(row=linha, column=1, columnspan=2, sticky="ew", padx=8, pady=(8, 0))
 
-    ttk.Label(quadro, text="O que a IA deve gerar").grid(row=5, column=0, sticky="w", pady=(10, 0))
+    ttk.Label(quadro, text="O que a IA deve gerar").grid(row=5, column=0, sticky="nw", pady=(10, 0))
     opcoes = ttk.Frame(quadro)
     opcoes.grid(row=5, column=1, columnspan=2, sticky="w", padx=8, pady=(10, 0))
+    linha_saida = ttk.Frame(opcoes)
+    linha_saida.pack(anchor="w")
     for chave, rotulo in SAIDAS.items():
-        ttk.Radiobutton(opcoes, text=rotulo, value=chave, variable=var_saida).pack(side="left", padx=(0, 14))
-    ttk.Checkbutton(opcoes, text="Pedir a entrega em PDF", variable=var_pdf).pack(side="left", padx=(10, 0))
+        ttk.Radiobutton(linha_saida, text=rotulo, value=chave, variable=var_saida).pack(
+            side="left", padx=(0, 14))
+    ttk.Checkbutton(linha_saida, text="Pedir a entrega em PDF", variable=var_pdf).pack(
+        side="left", padx=(10, 0))
+    ttk.Checkbutton(opcoes, text="Sugerir casos de teste adicionais (técnicas ISTQB/BSTQB)",
+                    variable=var_sugerir).pack(anchor="w", pady=(4, 0))
 
     # --- prévia
     ttk.Label(quadro, text="Prévia do prompt (é isto que será copiado)").grid(
@@ -108,6 +115,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
             observacoes=campos["observacoes"].get("1.0", "end"),
             saida=var_saida.get(),
             entregar_pdf=var_pdf.get(),
+            sugerir_casos=var_sugerir.get(),
         )
 
     def prompt_atual() -> str:
@@ -163,6 +171,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     var_ambiente.trace_add("write", agendar)
     var_saida.trace_add("write", agendar)
     var_pdf.trace_add("write", agendar)
+    var_sugerir.trace_add("write", agendar)
     for campo in campos.values():
         campo.bind("<KeyRelease>", agendar)
 

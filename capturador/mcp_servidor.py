@@ -181,13 +181,13 @@ def salvar_relatorio_pdf(teste: str, titulo: str, conteudo_markdown: str,
 
 @mcp.prompt(title="Analisar teste e gerar o relatório em PDF")
 def analisar_teste(teste: str, ambiente: str = "", objetivo: str = "", criterios: str = "",
-                   observacoes: str = "", saida: str = "ambos") -> str:
+                   observacoes: str = "", saida: str = "ambos", sugerir_casos: bool = True) -> str:
     """Instruções completas para analisar as evidências de um teste e entregar o PDF."""
     if saida not in SAIDAS:
         raise ValueError(f"`saida` deve ser uma de: {', '.join(SAIDAS)}.")
     return montar_prompt(_resolver_teste(teste), Formulario(
         ambiente=ambiente, objetivo=objetivo, criterios=criterios, observacoes=observacoes,
-        saida=saida, entregar_pdf=True, via_mcp=True))
+        saida=saida, entregar_pdf=True, via_mcp=True, sugerir_casos=sugerir_casos))
 
 
 def executar() -> None:

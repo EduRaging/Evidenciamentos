@@ -65,6 +65,14 @@ preferir (e que a empresa aprove). Sem chave de API e sem custo.
    prompt pedir que a IA devolva o resultado já como **arquivo PDF para baixar**, com capa e as
    imagens das evidências quando ela conseguir. Se a IA não gerar arquivos, o prompt manda que ela
    avise e entregue o conteúdo em Markdown, pronto para converter em PDF.
+   A caixa **Sugerir casos de teste adicionais (técnicas ISTQB/BSTQB)** (também marcada por
+   padrão) pede à IA que, **só quando as evidências derem base**, proponha casos extras usando as
+   técnicas do currículo ISTQB/BSTQB nível Foundation (CTFL 4.0): partição de equivalência, análise
+   de valor limite, tabela de decisão, transição de estado, adivinhação de erros, teste
+   exploratório e checklist, além de cenários de ponta a ponta, teste combinatório e permissões.
+   Os casos sugeridos vêm identificados (`CS-01`…), com técnica, prioridade por risco e a evidência
+   que motivou a ideia, e **sempre marcados como "não executado"**, separados do que foi testado.
+   As técnicas de caixa-branca ficam de fora, porque o testador só vê a tela.
 3. **Copiar prompt**, cole na IA e **anexe o PDF** do teste (ele já traz as evidências numeradas
    e com data/hora; o prompt se refere a "Evidência N"). Se a IA não ler imagens dentro de PDF,
    anexe os PNGs numerados da pasta (**Abrir pasta do teste**).
@@ -91,7 +99,8 @@ computador (com as imagens anexadas), sem depender de a IA gerar arquivos.
 | `ver_evidencia` | devolve a imagem de uma evidência para a IA olhar (reduzida a no máximo 1568 px) |
 | `salvar_relatorio_pdf` | grava o relatório (Markdown) em PDF + `.md` na pasta do teste |
 
-Há também o prompt `analisar_teste`, com as instruções completas (mesmas regras do prompt colado).
+Há também o prompt `analisar_teste`, com as instruções completas (mesmas regras do prompt colado,
+inclusive as sugestões de casos adicionais ISTQB/BSTQB; `sugerir_casos=false` as desliga).
 
 **Segurança**: toda ferramenta recebe só o *nome da pasta* do teste, sempre resolvido dentro da
 pasta de evidências; nada fora dela é lido ou escrito, e nenhum arquivo é sobrescrito (o segundo
