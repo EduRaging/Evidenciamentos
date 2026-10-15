@@ -77,6 +77,61 @@ teste como `Prompt para IA.txt` (cole na IA antes de fechar o app, ou abra esse 
 Antes de anexar, confira se as evidências não têm dados pessoais ou sensíveis. A qualidade da
 resposta depende da IA escolhida e deve ser revisada por quem executou o teste.
 
+## Servidor MCP (protótipo)
+
+Em vez de colar o prompt e anexar arquivos, o app pode ser conectado direto a uma IA que fale
+**MCP** (Model Context Protocol), como o Claude Desktop ou o Claude Code. A IA então **lê as
+evidências sozinha** e **grava o relatório em PDF dentro da pasta do teste**, gerado no seu
+computador (com as imagens anexadas), sem depender de a IA gerar arquivos.
+
+| Ferramenta | O que faz |
+|---|---|
+| `listar_testes` | lista os testes finalizados mais recentes |
+| `obter_teste` | dados do teste e a lista numerada de evidências |
+| `ver_evidencia` | devolve a imagem de uma evidência para a IA olhar (reduzida a no máximo 1568 px) |
+| `salvar_relatorio_pdf` | grava o relatório (Markdown) em PDF + `.md` na pasta do teste |
+
+Há também o prompt `analisar_teste`, com as instruções completas (mesmas regras do prompt colado).
+
+**Segurança**: toda ferramenta recebe só o *nome da pasta* do teste, sempre resolvido dentro da
+pasta de evidências; nada fora dela é lido ou escrito, e nenhum arquivo é sobrescrito (o segundo
+relatório com o mesmo título vira `(2)`). As leituras são marcadas como somente leitura. O PDF
+sai com o aviso "Rascunho gerado por IA… revisão do testador necessária".
+
+**Instalar** (usa o mesmo `.venv`; requer Python 3.11+):
+
+```bash
+.venv\Scripts\python.exe -m pip install -r requirements-mcp.txt
+```
+
+**Registrar no Claude Code**:
+
+```bash
+claude mcp add --transport stdio evidenciador -- "<pasta do projeto>\.venv\Scripts\python.exe" "<pasta do projeto>\servidor_mcp.py"
+```
+
+**Registrar no Claude desktop**: em `%APPDATA%\Claude\claude_desktop_config.json`, e reiniciar o app:
+
+```json
+{
+  "mcpServers": {
+    "evidenciador": {
+      "command": "<pasta do projeto>\\.venv\\Scripts\\python.exe",
+      "args": ["<pasta do projeto>\\servidor_mcp.py"]
+    }
+  }
+}
+```
+
+Depois, peça algo como: *"Analise o teste mais recente e gere o relatório em PDF"*, ou use o prompt
+`analisar_teste`. Por padrão o servidor lê a pasta de evidências definida nas Configurações do app
+(`CAPTURADOR_PASTA_BASE` a substitui).
+
+**Estado**: protótipo. Testado de ponta a ponta pelo protocolo com um cliente MCP (handshake,
+ferramentas, imagem, PDF, recusa de caminhos fora da pasta), mas **ainda não** com o Claude
+Desktop/Claude Code de verdade, e **não incluído no `.exe`** (um `.exe` sem janela não tem
+stdio; empacotar pede um executável de console à parte).
+
 ## Detalhes úteis
 
 - A janela do app **não aparece nos prints** e o aviso de captura não rouba o foco, então menus e

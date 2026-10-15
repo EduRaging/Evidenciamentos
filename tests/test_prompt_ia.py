@@ -59,6 +59,23 @@ class MontarPrompt(unittest.TestCase):
         self.assertNotIn("arquivo PDF para eu baixar", prompt)
         self.assertNotIn("entregar o resultado", prompt)
 
+    def test_variante_mcp_usa_ferramentas_em_vez_de_anexos(self):
+        teste = teste_exemplo()
+        teste.pasta = Path("C:/base/2026-10-09_1430 - Login no ERP")
+        prompt = montar_prompt(teste, Formulario(via_mcp=True))
+        self.assertIn("`ver_evidencia`", prompt)
+        self.assertIn("`salvar_relatorio_pdf`", prompt)
+        self.assertIn('teste="2026-10-09_1430 - Login no ERP"', prompt)
+        self.assertIn("Evidências disponíveis (2)", prompt)
+        self.assertIn("incluir_evidencias=true", prompt)
+        self.assertNotIn("Anexei", prompt)
+        self.assertNotIn("arquivo PDF para eu baixar", prompt)
+
+    def test_variante_mcp_sem_entrega_nao_menciona_salvar(self):
+        prompt = montar_prompt(teste_exemplo(), Formulario(via_mcp=True, entregar_pdf=False))
+        self.assertNotIn("`salvar_relatorio_pdf`", prompt)
+        self.assertIn("`ver_evidencia`", prompt)
+
     def test_nome_sugerido_do_pdf_depende_da_saida_e_e_seguro(self):
         teste = teste_exemplo()
         teste.nome_teste = "Login/Logout: perfis"

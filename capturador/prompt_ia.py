@@ -50,6 +50,7 @@ class Formulario:
     observacoes: str = ""
     saida: str = "ambos"  # chave de SAIDAS
     entregar_pdf: bool = True  # pede à IA o resultado já em arquivo PDF
+    via_mcp: bool = False  # a IA usa as ferramentas do servidor MCP em vez de anexos
 
 
 def _ou_nao_informado(texto: str) -> str:
@@ -76,7 +77,11 @@ def _lista_evidencias(teste: PastaTeste) -> str:
     return "\n".join(linhas)
 
 
-def _anexo(teste: PastaTeste) -> str:
+def _anexo(teste: PastaTeste, via_mcp: bool = False) -> str:
+    if via_mcp:
+        return (f'As evidências do teste "{teste.pasta.name}" estão ao seu alcance por ferramentas: use '
+                f"`ver_evidencia` para olhar cada uma, de 1 a {len(teste.evidencias)}, e olhe TODAS antes de "
+                'escrever qualquer coisa. A "Evidência N" é o item N da lista abaixo.')
     if teste.pdf:
         return (f'Anexei o arquivo "{teste.pdf}": a primeira página é a capa e cada página seguinte '
                 "é uma evidência, na mesma ordem da lista abaixo (a \"Evidência N\" do PDF é o item N). "
@@ -96,6 +101,19 @@ def _secao_entrega(nome_teste: str, saida: str) -> str:
         "junto dos casos de teste correspondentes.\n"
         "- Se você não conseguir gerar arquivos, avise logo no início e entregue o conteúdo completo em "
         "Markdown, pronto para eu converter em PDF."
+    )
+
+
+def _secao_entrega_mcp(teste: PastaTeste, saida: str) -> str:
+    titulo = "Casos de teste" if saida == "casos" else "Relatório de testes"
+    return (
+        "## Entrega em PDF\n"
+        "Quando terminar, chame a ferramenta `salvar_relatorio_pdf` com "
+        f'teste="{teste.pasta.name}", um título (sugestão: "{titulo} - {teste.nome_teste}") e o conteúdo '
+        "completo em Markdown (títulos, listas e tabelas são suportados), com incluir_evidencias=true para "
+        "anexar as imagens ao final. O PDF é gerado no computador do testador, na pasta do teste.\n"
+        "- Depois de salvar, responda só com o nome do arquivo gerado e um resumo de 3 a 5 linhas. "
+        "Não cole o relatório inteiro no chat."
     )
 
 
@@ -125,10 +143,12 @@ def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
         f"- Objetivo do teste: {_ou_nao_informado(form.objetivo)}\n"
         f"- Critérios de aceite / resultado esperado: {criterios}\n"
         f"- Observações do testador: {_ou_nao_informado(form.observacoes)}",
-        f"## Evidências anexadas ({len(teste.evidencias)})\n{_anexo(teste)}\n\n{_lista_evidencias(teste)}",
+        f"## Evidências {'disponíveis' if form.via_mcp else 'anexadas'} ({len(teste.evidencias)})\n"
+        f"{_anexo(teste, form.via_mcp)}\n\n{_lista_evidencias(teste)}",
         f"## Regras\n{_REGRAS}",
         "## O que produzir\n" + "\n\n".join(secoes),
     ]
     if form.entregar_pdf:
-        partes.append(_secao_entrega(teste.nome_teste, saida))
+        partes.append(_secao_entrega_mcp(teste, saida) if form.via_mcp
+                      else _secao_entrega(teste.nome_teste, saida))
     return "\n\n".join(partes) + "\n"
