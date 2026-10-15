@@ -5,11 +5,13 @@ import logging
 import os
 import queue
 import tkinter as tk
+from dataclasses import replace
 from pathlib import Path
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from . import atalhos, captura, config, recursos, winutil
 from .aviso import mostrar_aviso
+from .dialogo_prompt import abrir_dialogo_prompt
 from .dialogos import abrir_configuracoes
 from .sessao import ROTULOS, Sessao
 
@@ -83,6 +85,8 @@ class App:
         ttk.Button(acoes, text="Abrir imagem", command=self._abrir_selecionada).pack(side="left")
         ttk.Button(acoes, text="Remover selecionada", command=self._remover_selecionada).pack(
             side="left", padx=6)
+        ttk.Button(acoes, text="Preparar prompt para IA…", command=self._preparar_prompt).pack(
+            side="right")
 
         ttk.Separator(quadro).pack(fill="x", pady=12)
         rodape = ttk.Frame(quadro)
@@ -219,12 +223,67 @@ class App:
             return False
         self.var_nome.set("")
         self._recarregar_lista()
+        self._lembrar_pasta(pasta)
         self._status(f"Pasta criada: {pasta}")
-        if messagebox.askyesno("Teste finalizado",
-                               f"Evidências e PDF salvos em:\n{pasta}\n\nAbrir a pasta agora?",
-                               parent=self.raiz):
-            os.startfile(pasta)
+        self._dialogo_concluido(pasta)
         return True
+
+    def _lembrar_pasta(self, pasta: Path) -> None:
+        self.cfg = replace(self.cfg, ultima_pasta=str(pasta))
+        config.salvar(self.cfg)
+
+    def _dialogo_concluido(self, pasta: Path) -> None:
+        """Aviso de teste finalizado com os próximos passos (abrir a pasta ou preparar o prompt)."""
+        janela = tk.Toplevel(self.raiz)
+        janela.title("Teste finalizado")
+        janela.transient(self.raiz)
+        janela.resizable(False, False)
+        ttk.Label(janela, text=f"Evidências e PDF salvos em:\n{pasta}", justify="left",
+                  wraplength=460, padding=16).pack()
+        botoes = ttk.Frame(janela, padding=(16, 0, 16, 16))
+        botoes.pack(anchor="e")
+        escolha: list[str] = []
+
+        def fechar(acao: str = "") -> None:
+            escolha.append(acao)
+            janela.destroy()
+
+        ttk.Button(botoes, text="Preparar prompt para IA…", command=lambda: fechar("prompt")).pack(
+            side="left", padx=(0, 6))
+        ttk.Button(botoes, text="Abrir pasta", command=lambda: fechar("pasta")).pack(
+            side="left", padx=(0, 6))
+        ttk.Button(botoes, text="Fechar", command=fechar).pack(side="left")
+        janela.protocol("WM_DELETE_WINDOW", fechar)
+        janela.update_idletasks()
+        janela.grab_set()
+        janela.focus_force()
+        self.raiz.wait_window(janela)
+        acao = escolha[0] if escolha else ""
+        if acao == "pasta":
+            os.startfile(pasta)
+        elif acao == "prompt":
+            self._preparar_prompt(pasta)
+
+    def _preparar_prompt(self, pasta: Path | None = None) -> None:
+        """Abre a janela do prompt de IA para `pasta` (padrão: o último teste finalizado)."""
+        if pasta is None:
+            ultima = Path(self.cfg.ultima_pasta) if self.cfg.ultima_pasta else None
+            if ultima and ultima.is_dir():
+                pasta = ultima
+            else:
+                base = Path(self.cfg.pasta_base)
+                escolhida = filedialog.askdirectory(
+                    parent=self.raiz, initialdir=str(base) if base.is_dir() else None,
+                    title="Escolha a pasta do teste")
+                if not escolhida:
+                    return
+                pasta = Path(escolhida)
+        try:
+            usada = abrir_dialogo_prompt(self.raiz, pasta, self.cfg.pasta_base)
+        except ValueError as exc:
+            messagebox.showwarning("Pasta inválida", str(exc), parent=self.raiz)
+            return
+        self._lembrar_pasta(usada)
 
     def _descartar(self) -> None:
         if not self.sessao.evidencias:

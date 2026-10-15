@@ -14,8 +14,9 @@ from pathlib import Path
 
 from PIL import Image, ImageTk
 
-from . import __version__, atalhos, captura, recursos
+from . import __version__, atalhos, captura, dialogo_prompt, metadados, recursos
 from .pdf_relatorio import _registrar_fontes
+from .prompt_ia import Formulario, montar_prompt
 from .sessao import Sessao
 
 
@@ -52,14 +53,31 @@ def _atalhos_globais() -> str:
     return "registro e remoção de atalho global"
 
 
+def _finalizar_exemplo(tmp: Path) -> Path:
+    sessao = Sessao(tmp / "em_andamento")
+    imagem, _ = captura.capturar_monitor()
+    sessao.adicionar(imagem, "tela")
+    sessao.adicionar(imagem.crop((0, 0, 300, 200)), "recorte")
+    return sessao.finalizar("Autoteste de acentuação", "Autoteste", tmp / "base")
+
+
+def _prompt_ia() -> str:
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = _finalizar_exemplo(Path(tmp))
+        teste = metadados.ler(pasta)
+        prompt = montar_prompt(teste, Formulario(objetivo="Autoteste"))
+        for esperado in (teste.pdf, "Evidências anexadas (2)", "Autoteste de acentuação"):
+            if not esperado or esperado not in prompt:
+                raise AssertionError(f"prompt sem {esperado!r}")
+        if not callable(dialogo_prompt.abrir_dialogo_prompt):
+            raise AssertionError("janela do prompt indisponível")
+    return f"prompt de {len(prompt)} caracteres com PDF e evidências"
+
+
 def _sessao_e_pdf() -> str:
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        sessao = Sessao(tmp / "em_andamento")
-        imagem, _ = captura.capturar_monitor()
-        sessao.adicionar(imagem, "tela")
-        sessao.adicionar(imagem.crop((0, 0, 300, 200)), "recorte")
-        pasta = sessao.finalizar("Autoteste de acentuação", "Autoteste", tmp / "base")
+        pasta = _finalizar_exemplo(tmp)
         pdfs = list(pasta.glob("*.pdf"))
         if len(pdfs) != 1:
             raise AssertionError(f"esperava 1 PDF, achou {len(pdfs)}")
@@ -75,6 +93,7 @@ VERIFICACOES = (
     ("interface Tk e imagens", _tk_com_imagem),
     ("atalhos globais", _atalhos_globais),
     ("sessão, pasta e PDF", _sessao_e_pdf),
+    ("prompt para IA", _prompt_ia),
 )
 
 

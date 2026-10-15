@@ -42,6 +42,28 @@ o app; nas próximas vezes abre direto.
    O PDF tem uma capa (nome, data, testador, quantidade) e uma evidência por página, com
    data/hora e tipo (tela inteira ou recorte).
 
+## Prompt para IA (casos de teste e relatório)
+
+O app não se conecta a nenhuma IA: ele monta um **prompt pronto** para o senhor colar na IA que
+preferir (e que a empresa aprove). Sem chave de API e sem custo.
+
+1. Ao finalizar um teste, clique em **Preparar prompt para IA…** (ou use o botão de mesmo nome na
+   janela principal, que abre o último teste; **Trocar…** escolhe outro, inclusive testes antigos).
+2. Preencha o que souber: sistema/ambiente, objetivo, critérios de aceite e observações. A prévia
+   do prompt atualiza enquanto o senhor digita. Escolha o que a IA deve gerar: casos de teste,
+   relatório de execução ou os dois.
+3. **Copiar prompt**, cole na IA e **anexe o PDF** do teste (ele já traz as evidências numeradas
+   e com data/hora; o prompt se refere a "Evidência N"). Se a IA não ler imagens dentro de PDF,
+   anexe os PNGs numerados da pasta (**Abrir pasta do teste**).
+
+O prompt manda a IA se basear só no que está visível, escrever "não evidenciado" quando não der
+para confirmar, citar o número da evidência, não reproduzir dados pessoais e **sugerir** o status
+(Aprovado, Reprovado ou Inconclusivo) sem decidir sozinha. O texto também fica salvo na pasta do
+teste como `Prompt para IA.txt` (cole na IA antes de fechar o app, ou abra esse arquivo).
+
+Antes de anexar, confira se as evidências não têm dados pessoais ou sensíveis. A qualidade da
+resposta depende da IA escolhida e deve ser revisada por quem executou o teste.
+
 ## Detalhes úteis
 
 - A janela do app **não aparece nos prints** e o aviso de captura não rouba o foco, então menus e
@@ -50,6 +72,7 @@ o app; nas próximas vezes abre direto.
   Se fechar o app antes, ele oferece continuar de onde parou na próxima vez.
 - Em **Configurações…** dá para definir a pasta base e o nome do testador (sai na capa do PDF).
 - Erros inesperados ficam em `%APPDATA%\CapturadorEvidencias\capturador.log`.
+- Cada teste finalizado guarda um `evidencias.json` na pasta, usado para preparar o prompt de IA.
 - Só uma instância roda por vez.
 
 ## Limitações conhecidas

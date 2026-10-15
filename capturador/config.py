@@ -24,6 +24,7 @@ class Config:
     atalho_recorte: str = "ctrl+shift+f8"
     atalho_janela: str = "ctrl+shift+f7"
     testador: str = ""
+    ultima_pasta: str = ""  # último teste finalizado, para o prompt de IA
 
     def __post_init__(self) -> None:
         if not self.pasta_base:

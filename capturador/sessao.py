@@ -10,6 +10,8 @@ from pathlib import Path
 
 from PIL import Image
 
+from . import metadados
+from .metadados import EvidenciaInfo
 from .pdf_relatorio import ItemPdf, gerar_pdf
 
 ROTULOS = {"tela": "Tela inteira", "recorte": "Recorte"}
@@ -116,12 +118,16 @@ class Sessao:
         destino = _criar_pasta_unica(base, f"{datetime.now():%Y-%m-%d_%H%M} - {nome}")
         try:
             digitos = max(2, len(str(len(self.evidencias))))
-            itens = []
+            itens, infos = [], []
             for i, ev in enumerate(self.evidencias, start=1):
                 final = destino / f"{i:0{digitos}d}_{ev.tipo}.png"
                 shutil.copy2(self.caminho(ev), final)
-                itens.append(ItemPdf(final, ROTULOS.get(ev.tipo, ev.tipo), ev.momento))
-            gerar_pdf(destino / f"Evidencias - {nome}.pdf", nome_teste.strip(), testador.strip(), itens)
+                rotulo = ROTULOS.get(ev.tipo, ev.tipo)
+                itens.append(ItemPdf(final, rotulo, ev.momento))
+                infos.append(EvidenciaInfo(i, final.name, rotulo, ev.momento))
+            pdf = destino / f"Evidencias - {nome}.pdf"
+            gerar_pdf(pdf, nome_teste.strip(), testador.strip(), itens)
+            metadados.gravar(destino, nome_teste.strip(), testador.strip(), pdf.name, infos)
         except Exception:
             shutil.rmtree(destino, ignore_errors=True)  # só a pasta que acabamos de criar
             raise
