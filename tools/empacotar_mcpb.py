@@ -86,7 +86,9 @@ def manifesto() -> dict:
         },
         "compatibility": {
             "platforms": ["win32"],
-            "runtimes": {"python": f">={versao_python},<{sys.version_info.major}.{sys.version_info.minor + 1}"},
+            # faixa no formato do node-semver (o host é Node): o E é um ESPAÇO; com vírgula a faixa
+            # é inválida e o instalador mostra o requisito como não atendido
+            "runtimes": {"python": f">={versao_python}.0 <{sys.version_info.major}.{sys.version_info.minor + 1}.0"},
         },
     }
 
