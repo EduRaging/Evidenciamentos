@@ -139,19 +139,23 @@ def _secao_entrega_mcp(teste: PastaTeste, saida: str) -> str:
     )
 
 
-def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
-    saida = form.saida if form.saida in SAIDAS else "ambos"
+def _o_que_produzir(saida: str, sugerir_casos: bool) -> str:
     secoes = []
     if saida in ("casos", "ambos"):
         secoes.append(_SECAO_CASOS)
     if saida in ("relatorio", "ambos"):
         secoes.append(_SECAO_RELATORIO)
-    if form.sugerir_casos:
+    if sugerir_casos:
         secoes.append(_SECAO_SUGESTOES)
     if saida == "ambos":
         secoes.append("Faça primeiro os casos de teste e depois o relatório, reaproveitando os mesmos IDs."
                       + (" No relatório, trate os casos sugeridos (CS-xx) apenas como recomendação de testes "
-                         "adicionais, nunca como executados." if form.sugerir_casos else ""))
+                         "adicionais, nunca como executados." if sugerir_casos else ""))
+    return "\n\n".join(secoes)
+
+
+def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
+    saida = form.saida if form.saida in SAIDAS else "ambos"
     tarefa = _TAREFAS[saida] + (" e entregar o resultado em um arquivo PDF" if form.entregar_pdf else "")
 
     criterios = form.criterios.strip()
@@ -172,9 +176,83 @@ def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
         f"## Evidências {'disponíveis' if form.via_mcp else 'anexadas'} ({len(teste.evidencias)})\n"
         f"{_anexo(teste, form.via_mcp)}\n\n{_lista_evidencias(teste)}",
         f"## Regras\n{_REGRAS}",
-        "## O que produzir\n" + "\n\n".join(secoes),
+        "## O que produzir\n" + _o_que_produzir(saida, form.sugerir_casos),
     ]
     if form.entregar_pdf:
         partes.append(_secao_entrega_mcp(teste, saida) if form.via_mcp
                       else _secao_entrega(teste.nome_teste, saida))
+    return "\n\n".join(partes) + "\n"
+
+
+MAX_TESTES = 12  # por pedido: cada teste exige olhar todas as imagens, e o prompt precisa caber no link
+
+_TAREFAS_VARIOS = {
+    "casos": "montar, para CADA teste, os casos de teste executados",
+    "relatorio": "montar, para CADA teste, o relatório de execução",
+    "ambos": "montar, para CADA teste, os casos de teste executados e o relatório de execução",
+}
+
+_REGRAS_VARIOS = _REGRAS + (
+    "\n- Cada relatório trata SOMENTE do seu teste: não misture evidências nem conclusões de testes "
+    "diferentes. Comparações entre testes só no resumo final, claramente separadas.")
+
+
+def _linha_do_teste(numero: int, teste: PastaTeste) -> str:
+    return (f'{numero}. {teste.nome_teste} — pasta "{teste.pasta.name}" — testador: '
+            f"{_ou_nao_informado(teste.testador)} — {_periodo(teste)} — {len(teste.evidencias)} evidências")
+
+
+def _entrega_varios(saida: str) -> str:
+    titulo = "Casos de teste" if saida == "casos" else "Relatório de testes"
+    return (
+        "## Entrega em PDF\n"
+        "Ao terminar CADA teste, chame a ferramenta `salvar_relatorio_pdf` com teste=\"<nome da pasta do teste, "
+        f'como na lista acima>", um título (sugestão: "{titulo} - <nome do teste>") e o conteúdo completo em '
+        "Markdown (títulos, listas e tabelas são suportados), com incluir_evidencias=true para anexar as imagens "
+        "ao final. O PDF é gerado no computador do testador, na pasta do próprio teste.\n"
+        "- Salve o relatório de um teste ANTES de começar o próximo. Se não der para concluir todos nesta "
+        "conversa, diga quais ficaram pendentes.\n"
+        "- No fim, responda com uma tabela (Teste | Status sugerido | Caminho completo do PDF, campo "
+        "`caminho_pdf` do resultado) e um resumo geral de 3 a 5 linhas. Não cole os relatórios no chat."
+    )
+
+
+def montar_prompt_varios(testes: list[PastaTeste], form: Formulario) -> str:
+    """Prompt para a IA analisar VÁRIOS testes de uma vez pelas ferramentas do servidor MCP.
+
+    Só existe no modo das ferramentas (a IA lê as pastas): com anexos não dá para misturar testes.
+    Um relatório por teste, cada um salvo na pasta do seu teste.
+    """
+    if not testes:
+        raise ValueError("Nenhum teste para analisar.")
+    if len(testes) > MAX_TESTES:
+        raise ValueError(f"Selecione no máximo {MAX_TESTES} testes por vez (foram {len(testes)}).")
+    saida = form.saida if form.saida in SAIDAS else "ambos"
+    tarefa = _TAREFAS_VARIOS[saida] + (
+        " e salvar cada resultado em PDF na pasta do respectivo teste" if form.entregar_pdf else "")
+    criterios = form.criterios.strip()
+    if not criterios:
+        criterios = f"{NAO_INFORMADO} (deduza pelo nome do teste e pelas evidências e marque como \"deduzido\")"
+    total = sum(len(t.evidencias) for t in testes)
+    partes = [
+        f"Você é um analista de qualidade (QA) sênior. Vou te pedir a análise de {len(testes)} "
+        f"{'testes manuais' if len(testes) != 1 else 'teste manual'} de software, ao todo {total} evidências em "
+        f"imagem, e preciso que você faça o seguinte: {tarefa}.",
+        "## Contexto (vale para todos os testes)\n"
+        f"- Sistema / ambiente: {_ou_nao_informado(form.ambiente)}\n"
+        f"- Objetivo: {_ou_nao_informado(form.objetivo)}\n"
+        f"- Critérios de aceite / resultado esperado: {criterios}\n"
+        f"- Observações do testador: {_ou_nao_informado(form.observacoes)}",
+        f"## Testes selecionados ({len(testes)})\n" + "\n".join(_linha_do_teste(i, t) for i, t in enumerate(testes, 1)),
+        "## Como acessar as evidências\n"
+        "Elas estão ao seu alcance por ferramentas. Antes de analisar, diga ao usuário qual pasta está sendo lida "
+        "(campo `pasta_base` de `listar_testes`). Para cada teste da lista, chame `obter_teste` com o nome da pasta "
+        "(o texto entre aspas acima) e use `ver_evidencia` para olhar TODAS as evidências dele, de 1 até o total, "
+        "antes de escrever qualquer coisa sobre ele. A \"Evidência N\" é o item N da lista devolvida por "
+        "`obter_teste`. Processe UM teste por vez.",
+        f"## Regras\n{_REGRAS_VARIOS}",
+        "## O que produzir (para cada teste)\n" + _o_que_produzir(saida, form.sugerir_casos),
+    ]
+    if form.entregar_pdf:
+        partes.append(_entrega_varios(saida))
     return "\n\n".join(partes) + "\n"

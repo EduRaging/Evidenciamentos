@@ -74,6 +74,17 @@ Selecione um PDF (ou clique com o botão direito) e use:
 O padrão de e-mail do Windows (`mailto:`) não permite anexar arquivos, por isso o anexo é feito
 colando o PDF já copiado.
 
+**Enviar ao Claude para analisar…** — com **Ctrl** ou **Shift** o senhor seleciona **vários PDFs**
+(até 12 testes por vez) e o botão (ou o menu do botão direito) abre a janela do prompt já com esses
+testes. Cada PDF aponta para a pasta do seu teste: o Claude lê as **imagens** dessa pasta pela
+extensão (não o conteúdo do PDF), e dois PDFs do mesmo teste contam como um só. O prompt pede **um
+relatório por teste, salvo na pasta do próprio teste** (não um consolidado), um teste por vez, e ao
+final uma tabela com o status sugerido e o caminho de cada PDF. Os campos Sistema/ambiente, Objetivo,
+Critérios e Observações valem para todos os testes selecionados. Testes sem imagens são ignorados com
+aviso. Com vários testes só existe o modo "Claude com a extensão" (com anexos não dá para misturar
+testes), e o Claude pode pedir permissão para gravar cada PDF. Se algum teste não couber no
+limite de ~12 mil caracteres do link, o app copia o prompt para colar.
+
 ## Prompt para IA (casos de teste e relatório)
 
 O app não se conecta a nenhuma IA: ele monta um **prompt pronto** para o senhor enviar ao Claude

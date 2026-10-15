@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from . import atalhos, captura, config, recursos, winutil
 from .aviso import mostrar_aviso
-from .dialogo_prompt import abrir_dialogo_prompt
+from .dialogo_prompt import abrir_dialogo_prompt, ler_testes
 from .dialogos import abrir_configuracoes
 from .painel_pdfs import PainelPdfs
 from .sessao import ROTULOS, Sessao
@@ -58,7 +58,7 @@ class App:
         self.abas.pack(fill="both", expand=True)
         quadro = ttk.Frame(self.abas, padding=14)
         self.abas.add(quadro, text="Capturar")
-        self.painel_pdfs = PainelPdfs(self.abas, lambda: self.cfg.pasta_base)
+        self.painel_pdfs = PainelPdfs(self.abas, lambda: self.cfg.pasta_base, self._analisar_varios)
         self.abas.add(self.painel_pdfs, text="PDFs gerados")
         self.abas.bind("<<NotebookTabChanged>>", lambda _e: self.painel_pdfs.atualizar())
 
@@ -293,6 +293,22 @@ class App:
             messagebox.showwarning("Pasta inválida", str(exc), parent=self.raiz)
             return
         self._lembrar_pasta(usada)
+
+    def _analisar_varios(self, pastas: list[Path]) -> None:
+        """Abre a janela do prompt para os testes escolhidos na aba "PDFs gerados"."""
+        testes, ignorados = ler_testes(pastas)
+        if ignorados:
+            lista = "\n".join(f"• {nome}" for nome, _motivo in ignorados)
+            messagebox.showinfo(
+                "Testes ignorados",
+                "Estes testes não têm imagens de evidência que o Claude possa analisar (ou o registro "
+                f"evidencias.json está inválido), então ficaram de fora:\n\n{lista}", parent=self.raiz)
+        if not testes:
+            return
+        try:
+            abrir_dialogo_prompt(self.raiz, [t.pasta for t in testes], self.cfg.pasta_base)
+        except ValueError as exc:
+            messagebox.showwarning("Não foi possível preparar o envio", str(exc), parent=self.raiz)
 
     def _descartar(self) -> None:
         if not self.sessao.evidencias:

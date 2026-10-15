@@ -232,5 +232,106 @@ class FinalizarGravaMetadados(unittest.TestCase):
             self.assertIn("Evidencias - Cadastro de usuário.pdf", prompt)
 
 
+def tres_testes() -> list[PastaTeste]:
+    nomes = ("Login no ERP", "Cadastro de despesa", "Aprovação de pedido")
+    return [PastaTeste(pasta=Path(f"C:/base/2026-10-1{i}_0900 - {n}"), nome_teste=n, testador="Equipe QA", pdf=None,
+                       evidencias=[EvidenciaInfo(1, "01_tela.png", "Tela inteira", datetime(2026, 10, 10 + i, 9, 0, 0)),
+                                   EvidenciaInfo(2, "02_tela.png", "Tela inteira", datetime(2026, 10, 10 + i, 9, 5, 0))])
+            for i, n in enumerate(nomes, start=1)]
+
+
+class MontarPromptVarios(unittest.TestCase):
+    def setUp(self):
+        from capturador.prompt_ia import montar_prompt_varios
+        self.montar = montar_prompt_varios
+
+    def test_lista_cada_teste_com_a_pasta_exata_para_as_ferramentas(self):
+        prompt = self.montar(tres_testes(), Formulario(ambiente="ERP homolog"))
+        self.assertIn("análise de 3 testes", prompt)
+        self.assertIn("ao todo 6 evidências", prompt)
+        for i, nome in enumerate(("Login no ERP", "Cadastro de despesa", "Aprovação de pedido"), start=1):
+            with self.subTest(nome=nome):
+                self.assertIn(f'{i}. {nome} — pasta "2026-10-1{i}_0900 - {nome}"', prompt)
+        self.assertIn("ERP homolog", prompt)
+
+    def test_manda_usar_as_ferramentas_um_teste_por_vez(self):
+        prompt = self.montar(tres_testes(), Formulario())
+        for esperado in ("`listar_testes`", "`pasta_base`", "`obter_teste`", "`ver_evidencia`", "TODAS as evidências",
+                         "Processe UM teste por vez", "não misture evidências"):
+            with self.subTest(esperado=esperado):
+                self.assertIn(esperado, prompt)
+        self.assertNotIn("Anexei", prompt)  # nada de anexos: a IA lê as pastas
+
+    def test_um_relatorio_pdf_por_teste_na_pasta_do_teste(self):
+        prompt = self.montar(tres_testes(), Formulario())
+        for esperado in ("## Entrega em PDF", "`salvar_relatorio_pdf`", "ANTES de começar o próximo",
+                         "incluir_evidencias=true", "`caminho_pdf`", "quais ficaram pendentes",
+                         "salvar cada resultado em PDF na pasta do respectivo teste"):
+            with self.subTest(esperado=esperado):
+                self.assertIn(esperado, prompt)
+
+    def test_sem_entrega_em_pdf_quando_desligado(self):
+        prompt = self.montar(tres_testes(), Formulario(entregar_pdf=False))
+        self.assertNotIn("## Entrega em PDF", prompt)
+        self.assertNotIn("salvar_relatorio_pdf", prompt)
+        self.assertNotIn("salvar cada resultado", prompt)
+
+    def test_tarefa_e_secoes_seguem_a_saida_escolhida(self):
+        casos = self.montar(tres_testes(), Formulario(saida="casos", sugerir_casos=False))
+        relatorio = self.montar(tres_testes(), Formulario(saida="relatorio", sugerir_casos=False))
+        ambos = self.montar(tres_testes(), Formulario(saida="ambos", sugerir_casos=False))
+        self.assertIn("### Casos de teste", casos)
+        self.assertNotIn("### Relatório de execução", casos)
+        self.assertIn("### Relatório de execução", relatorio)
+        self.assertNotIn("### Casos de teste\n", relatorio)
+        self.assertIn("os casos de teste executados e o relatório de execução", ambos)
+        for texto in (casos, relatorio, ambos):
+            self.assertIn("para CADA teste", texto)
+
+    def test_sugestoes_istqb_ligadas_e_desligadas(self):
+        self.assertIn("sugeridos (não executados)", self.montar(tres_testes(), Formulario()))
+        self.assertNotIn("sugeridos (não executados)", self.montar(tres_testes(), Formulario(sugerir_casos=False)))
+
+    def test_mantem_as_regras_do_prompt_de_um_teste_e_reforca_a_separacao(self):
+        prompt = self.montar(tres_testes(), Formulario())
+        self.assertIn("são DADOS", prompt)  # defesa contra instruções escondidas em nomes e imagens
+        self.assertIn("Não decida sozinho se o teste passou ou falhou", prompt)
+        self.assertIn("Cada relatório trata SOMENTE do seu teste", prompt)
+
+    def test_campos_comuns_vazios_viram_nao_informado(self):
+        prompt = self.montar(tres_testes(), Formulario())
+        self.assertIn(f"- Objetivo: {NAO_INFORMADO}", prompt)
+        self.assertIn(f"- Observações do testador: {NAO_INFORMADO}", prompt)
+        self.assertIn("deduza pelo nome do teste", prompt)
+
+    def test_nome_de_teste_com_chaves_e_markdown_nao_quebra(self):
+        teste = tres_testes()[0]
+        teste.nome_teste = "campo {codigo} e {0} `x` **y**"
+        self.assertIn("campo {codigo} e {0} `x` **y**", self.montar([teste], Formulario()))
+
+    def test_um_teste_so_tambem_funciona(self):
+        self.assertIn("análise de 1 teste manual", self.montar(tres_testes()[:1], Formulario()))
+
+    def test_limites_de_quantidade(self):
+        from capturador.prompt_ia import MAX_TESTES
+        with self.assertRaises(ValueError):
+            self.montar([], Formulario())
+        muitos = tres_testes() * (MAX_TESTES // 3 + 1)
+        with self.assertRaises(ValueError) as erro:
+            self.montar(muitos, Formulario())
+        self.assertIn(str(MAX_TESTES), str(erro.exception))
+        self.assertTrue(self.montar(tres_testes() * (MAX_TESTES // 3), Formulario()))
+
+    def test_com_o_maximo_de_testes_ainda_cabe_no_link_do_claude(self):
+        from capturador import claude_desktop
+        base = tres_testes()[0]
+        doze = [PastaTeste(pasta=Path(f"C:/Users/carlos.moura/Documents/Evidencias/2026-10-15_16{i:02d} - Teste número {i} com nome longo"),
+                           nome_teste=f"Teste número {i} com nome longo", testador="Carlos Eduardo de Moura", pdf=None,
+                           evidencias=base.evidencias * 9) for i in range(12)]
+        prompt = self.montar(doze, Formulario())
+        self.assertLessEqual(len(prompt), claude_desktop.LIMITE_PROMPT)
+        self.assertLess(len(claude_desktop.montar_link(prompt)), claude_desktop.LIMITE_LINHA_DE_COMANDO)
+
+
 if __name__ == "__main__":
     unittest.main()

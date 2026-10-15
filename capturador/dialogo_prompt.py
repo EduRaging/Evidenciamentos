@@ -5,9 +5,10 @@ import os
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from typing import Sequence
 
 from . import claude_desktop, extensao_claude, metadados
-from .prompt_ia import SAIDAS, Formulario, montar_prompt
+from .prompt_ia import MAX_TESTES, SAIDAS, Formulario, montar_prompt, montar_prompt_varios
 
 ARQUIVO_PROMPT = "Prompt para IA.txt"
 AVISO = ("Antes de enviar ou anexar, confira se as evidências não têm dados pessoais ou sensíveis e se a "
@@ -21,15 +22,51 @@ def _campo_texto(pai: tk.Misc, linhas: int) -> tk.Text:
     return texto
 
 
-def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
-    """Abre a janela para o teste em `pasta`. Devolve a pasta que ficou selecionada.
+def ler_testes(pastas: Sequence[Path | str]) -> tuple[list[metadados.PastaTeste], list[tuple[str, str]]]:
+    """Lê os testes de `pastas` (sem repetir). Devolve (testes lidos, [(nome da pasta, motivo) ignorados])."""
+    testes, ignorados, vistas = [], [], set()
+    for pasta in pastas:
+        chave = os.path.normcase(os.path.normpath(str(pasta)))
+        if chave in vistas:
+            continue
+        vistas.add(chave)
+        try:
+            teste = metadados.ler(pasta)
+        except ValueError as exc:
+            ignorados.append((Path(pasta).name, str(exc)))
+            continue
+        if not teste.evidencias:  # só PDF/outros arquivos: não há imagens para o Claude analisar
+            ignorados.append((Path(pasta).name, "sem imagens de evidência"))
+            continue
+        testes.append(teste)
+    return testes, ignorados
 
-    Levanta ValueError (antes de abrir a janela) se a pasta não for de um teste.
+
+def _resumo_dos_testes(testes: list[metadados.PastaTeste]) -> str:
+    nomes = "; ".join(t.nome_teste for t in testes)
+    if len(nomes) > 90:
+        nomes = nomes[:87].rstrip() + "…"
+    return f"{len(testes)} testes: {nomes}  ({sum(len(t.evidencias) for t in testes)} evidências)"
+
+
+def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base: str) -> Path:
+    """Abre a janela para o teste em `pasta` (ou para VÁRIOS testes, se for uma lista).
+
+    Devolve a pasta que ficou selecionada (a do primeiro, no modo de vários testes).
+    Levanta ValueError (antes de abrir a janela) se uma pasta não for de um teste ou se forem testes demais.
+    Com vários testes só existe o modo "Claude com a extensão": ele lê as pastas e salva um PDF por teste.
     """
-    estado = {"teste": metadados.ler(pasta), "agendado": None}
+    pastas = [Path(pasta)] if isinstance(pasta, (str, Path)) else [Path(p) for p in pasta]
+    if not pastas:
+        raise ValueError("Nenhum teste selecionado.")
+    if len(pastas) > MAX_TESTES:
+        raise ValueError(f"Selecione no máximo {MAX_TESTES} testes por vez (foram {len(pastas)}).")
+    testes = [metadados.ler(p) for p in pastas]
+    multiplo = len(testes) > 1
+    estado = {"teste": testes[0], "testes": testes, "agendado": None}
 
     janela = tk.Toplevel(pai)
-    janela.title("Preparar prompt para IA")
+    janela.title("Preparar prompt para IA" + (f" — {len(testes)} testes" if multiplo else ""))
     janela.geometry("780x760")
     janela.minsize(700, 700)
     janela.transient(pai)
@@ -48,22 +85,23 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     var_status = tk.StringVar()
 
     # --- teste escolhido
-    ttk.Label(quadro, text="Teste").grid(row=0, column=0, sticky="w")
-    ttk.Label(quadro, textvariable=var_titulo, font=("Segoe UI", 10, "bold")).grid(
-        row=0, column=1, sticky="w", padx=8)
-    botao_trocar = ttk.Button(quadro, text="Trocar…")
-    botao_trocar.grid(row=0, column=2)
+    ttk.Label(quadro, text="Testes" if multiplo else "Teste").grid(row=0, column=0, sticky="nw")
+    ttk.Label(quadro, textvariable=var_titulo, font=("Segoe UI", 10, "bold"), wraplength=470,
+              justify="left").grid(row=0, column=1, sticky="w", padx=8)
+    botao_trocar = ttk.Button(quadro, text="Trocar…", state="disabled" if multiplo else "normal")
+    botao_trocar.grid(row=0, column=2, sticky="n")
 
     # --- formulário
-    ttk.Label(quadro, text="Sistema / ambiente").grid(row=1, column=0, sticky="w", pady=(10, 0))
+    de_todos = "\n(de todos os testes)" if multiplo else ""
+    ttk.Label(quadro, text="Sistema / ambiente" + de_todos).grid(row=1, column=0, sticky="w", pady=(10, 0))
     ttk.Entry(quadro, textvariable=var_ambiente).grid(row=1, column=1, columnspan=2, sticky="ew",
                                                       padx=8, pady=(10, 0))
 
     campos = {}
     for linha, (chave, rotulo, altura) in enumerate((
-            ("objetivo", "Objetivo do teste", 3),
-            ("criterios", "Critérios de aceite /\nresultado esperado", 3),
-            ("observacoes", "Observações", 2)), start=2):
+            ("objetivo", "Objetivo do teste" + de_todos, 3),
+            ("criterios", "Critérios de aceite /\nresultado esperado" + de_todos, 3),
+            ("observacoes", "Observações" + de_todos, 2)), start=2):
         ttk.Label(quadro, text=rotulo).grid(row=linha, column=0, sticky="nw", pady=(8, 0))
         campos[chave] = _campo_texto(quadro, altura)
         campos[chave].grid(row=linha, column=1, columnspan=2, sticky="ew", padx=8, pady=(8, 0))
@@ -80,8 +118,13 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
         side="left", padx=(10, 0))
     ttk.Checkbutton(opcoes, text="Sugerir casos de teste adicionais (técnicas ISTQB/BSTQB)",
                     variable=var_sugerir).pack(anchor="w", pady=(4, 0))
-    ttk.Checkbutton(opcoes, text="Claude com a extensão instalada (ele lê as evidências direto da pasta)",
-                    variable=var_extensao).pack(anchor="w", pady=(4, 0))
+    chk_extensao = ttk.Checkbutton(
+        opcoes, variable=var_extensao, text="Claude com a extensão instalada (ele lê as evidências direto da pasta)"
+        + (" — necessário com vários testes" if multiplo else ""))
+    chk_extensao.pack(anchor="w", pady=(4, 0))
+    if multiplo:
+        var_extensao.set(True)
+        chk_extensao.state(["disabled"])  # com anexos não dá para misturar testes: só a extensão lê as pastas
 
     # --- prévia
     ttk.Label(quadro, text="Prévia do prompt (é isto que será enviado ou copiado)").grid(
@@ -108,7 +151,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     botao_enviar.pack(side="left", ipady=4, ipadx=8)
     botao_copiar = ttk.Button(rodape, text="Copiar prompt")
     botao_copiar.pack(side="left", padx=8)
-    botao_pasta = ttk.Button(rodape, text="Abrir pasta do teste")
+    botao_pasta = ttk.Button(rodape, text="Abrir pasta dos testes" if multiplo else "Abrir pasta do teste")
     botao_pasta.pack(side="left")
     ttk.Button(rodape, text="Fechar", command=janela.destroy).pack(side="right")
     ttk.Label(quadro, textvariable=var_status, foreground="#1b5e20", wraplength=700,
@@ -128,11 +171,18 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
         )
 
     def prompt_atual() -> str:
+        if multiplo:
+            return montar_prompt_varios(estado["testes"], formulario())
         return montar_prompt(estado["teste"], formulario())
 
     def problemas_da_extensao() -> list[str]:
-        """O que impediria o Claude de ler este teste pela extensão (vazio se a caixa está desmarcada)."""
-        return extensao_claude.avisos(estado["teste"].pasta) if var_extensao.get() else []
+        """O que impediria o Claude de ler o(s) teste(s) pela extensão (vazio se a caixa está desmarcada)."""
+        if not var_extensao.get():
+            return []
+        achados: list[str] = []
+        for teste in estado["testes"]:
+            achados.extend(extensao_claude.avisos(teste.pasta))
+        return list(dict.fromkeys(achados))  # o mesmo aviso não se repete para cada teste
 
     def atualizar_aviso_extensao(*_args) -> None:
         var_aviso_extensao.set("\n".join(f"⚠ {p}" for p in problemas_da_extensao()))
@@ -147,7 +197,8 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
         except tk.TclError:
             return  # janela fechada enquanto a atualização estava agendada
         teste = estado["teste"]
-        var_titulo.set(f"{teste.nome_teste}  ({len(teste.evidencias)} evidências)")
+        var_titulo.set(_resumo_dos_testes(estado["testes"]) if multiplo
+                       else f"{teste.nome_teste}  ({len(teste.evidencias)} evidências)")
 
     def agendar(*_args) -> None:
         if estado["agendado"]:
@@ -159,6 +210,8 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
         janela.clipboard_clear()
         janela.clipboard_append(texto)
         janela.update()
+        if multiplo:
+            return ""  # o texto vale para vários testes: não há uma pasta só onde guardá-lo
         destino = estado["teste"].pasta / ARQUIVO_PROMPT
         try:
             destino.write_text(texto, encoding="utf-8-sig")  # BOM: o Bloco de Notas acerta os acentos
@@ -189,8 +242,10 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
         janela.update_idletasks()
         resultado = claude_desktop.abrir_conversa(texto)
         if resultado == claude_desktop.PREENCHIDO:
+            pedidos = (f" Ele pode pedir permissão para gravar cada um dos {len(estado['testes'])} PDFs."
+                       if multiplo and var_pdf.get() else "")
             var_status.set("O Claude abriu com o prompt preenchido. Confira e aperte Enter para enviar: "
-                           f"nada sai do computador antes disso.{a_anexar()}")
+                           f"nada sai do computador antes disso.{a_anexar()}{pedidos}")
             return
         salvo = guardar_copia(texto)  # o link não deu certo: o prompt segue pela área de transferência
         if resultado == claude_desktop.VAZIA:
@@ -217,7 +272,8 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     botao_trocar.configure(command=trocar)
     botao_enviar.configure(command=enviar)
     botao_copiar.configure(command=copiar)
-    botao_pasta.configure(command=lambda: os.startfile(estado["teste"].pasta))
+    botao_pasta.configure(command=lambda: os.startfile(
+        estado["teste"].pasta.parent if multiplo else estado["teste"].pasta))
     var_ambiente.trace_add("write", agendar)
     var_saida.trace_add("write", agendar)
     var_pdf.trace_add("write", agendar)
