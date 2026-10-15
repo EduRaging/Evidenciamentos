@@ -8,6 +8,7 @@ instalar: dê dois cliques no .mcpb (o Claude desktop abre o diálogo de instala
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -99,8 +100,13 @@ def montar(destino: Path) -> None:
     (servidor / "main.py").write_text(PONTO_DE_ENTRADA, encoding="utf-8")
 
     print("Instalando as dependências no pacote (pode levar um minuto)...")
+    # Só versões travadas com hash (requirements-mcpb.lock) e só pacotes prontos (wheels): nada é
+    # compilado nem executado a partir de código-fonte de terceiros, e um pacote adulterado no PyPI
+    # não bate com o hash e é recusado. Para atualizar: veja o README (pip-compile --generate-hashes).
     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check",
-                    "--target", str(servidor / "lib"), "-r", str(RAIZ / "requirements-mcp.txt")], check=True)
+                    "--require-hashes", "--only-binary", ":all:",
+                    "--target", str(servidor / "lib"), "-r", str(RAIZ / "requirements-mcpb.lock")],
+                   check=True)
     for sobra in list((servidor / "lib").rglob("__pycache__")) + [servidor / "lib" / "bin"]:
         shutil.rmtree(sobra, ignore_errors=True)
 
@@ -129,7 +135,10 @@ def main() -> int:
     montar(destino)
     arquivo = RAIZ / "dist" / NOME_ARQUIVO
     compactar(destino, arquivo)
+    soma = hashlib.sha256(arquivo.read_bytes()).hexdigest()
+    arquivo.with_name(arquivo.name + ".sha256").write_text(f"{soma}  {arquivo.name}\n", encoding="utf-8")
     print(f"Extensão gerada: {arquivo}  ({arquivo.stat().st_size / 1024 / 1024:.1f} MB)")
+    print(f"SHA-256: {soma}")
     print("Manifesto em build\\mcpb\\manifest.json. Instale dando dois cliques no .mcpb.")
     return 0
 

@@ -72,6 +72,17 @@ def _resolver_teste(teste: str) -> PastaTeste:
     return metadados.ler(pasta)
 
 
+def _caminho_da_evidencia(dados: PastaTeste, ev: metadados.EvidenciaInfo) -> Path | None:
+    """Arquivo da evidência, só se estiver realmente DENTRO da pasta do teste.
+
+    O .resolve() segue atalhos/links simbólicos: um link para fora da pasta é recusado.
+    """
+    caminho = (dados.pasta / ev.arquivo).resolve()
+    if caminho.parent != dados.pasta.resolve() or not caminho.is_file():
+        return None
+    return caminho
+
+
 def _evidencia(dados: PastaTeste, numero: int) -> metadados.EvidenciaInfo:
     for ev in dados.evidencias:
         if ev.numero == numero:
@@ -136,8 +147,8 @@ def ver_evidencia(teste: str, numero: int) -> Image:
     """Devolve a imagem da evidência `numero` (1 a N) para você olhar."""
     dados = _resolver_teste(teste)
     ev = _evidencia(dados, numero)
-    caminho = (dados.pasta / ev.arquivo).resolve()
-    if caminho.parent != dados.pasta.resolve() or not caminho.is_file():
+    caminho = _caminho_da_evidencia(dados, ev)
+    if caminho is None:
         raise ValueError(f"O arquivo da evidência {numero} não foi encontrado na pasta do teste.")
     with PILImage.open(caminho) as img:
         img = img.convert("RGB")
@@ -168,8 +179,8 @@ def salvar_relatorio_pdf(teste: str, titulo: str, conteudo_markdown: str,
     evidencias = []
     if incluir_evidencias:
         for ev in dados.evidencias:
-            caminho = dados.pasta / ev.arquivo
-            if caminho.is_file():
+            caminho = _caminho_da_evidencia(dados, ev)
+            if caminho is not None:
                 evidencias.append(EvidenciaPdf(caminho, ev.rotulo, ev.numero, ev.momento))
     subtitulo = (f"Teste: {dados.nome_teste} · gerado em {datetime.now():%d/%m/%Y %H:%M} · {AVISO_IA}")
     paginas = gerar_pdf_de_markdown(pdf, titulo, conteudo_markdown, subtitulo, evidencias)

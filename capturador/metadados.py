@@ -67,19 +67,27 @@ def ler(pasta: Path | str) -> PastaTeste:
         return _varrer(pasta)
 
 
+def _nome_simples(nome: str) -> str:
+    """Só o nome de um arquivo, nunca um caminho: o JSON pode ter sido adulterado."""
+    if not nome or nome in (".", "..") or Path(nome).name != nome or any(c in nome for c in '/\\:\x00'):
+        raise ValueError(f"Nome de arquivo inválido em {ARQUIVO}: {nome!r}")
+    return nome
+
+
 def _ler_json(pasta: Path) -> PastaTeste:
     dados = json.loads((pasta / ARQUIVO).read_text(encoding="utf-8"))
     evidencias = [
         EvidenciaInfo(
             numero=int(e["numero"]),
-            arquivo=str(e["arquivo"]),
+            arquivo=_nome_simples(str(e["arquivo"])),
             rotulo=str(e["rotulo"]),
             momento=datetime.fromisoformat(e["hora"]) if e.get("hora") else None,
         )
         for e in dados["evidencias"]
     ]
+    pdf = dados.get("pdf")
     return PastaTeste(pasta, str(dados["nome_teste"]), str(dados.get("testador", "")),
-                      dados.get("pdf"), evidencias)
+                      _nome_simples(str(pdf)) if pdf else None, evidencias)
 
 
 def _varrer(pasta: Path) -> PastaTeste:

@@ -188,6 +188,41 @@ só conversar no chat: *"Analise o teste mais recente e gere o relatório em PDF
   administrador pode restringir extensões.
 - **Ainda não foi instalado no Claude desktop de verdade.**
 
+#### Segurança da extensão
+
+A extensão é um processo local com as **permissões do seu usuário** (a documentação da Anthropic
+não descreve isolamento; trate-a como um programa comum). O que foi feito para reduzir o risco:
+
+- **Código próprio**: sem rede e sem execução de comandos (conferido por busca nos módulos
+  empacotados). Lê só os PNGs dos testes dentro da pasta configurada e escreve só PDF/`.md`
+  novos nela, sem sobrescrever. O confinamento foi testado com `..`, caminhos absolutos, nomes
+  adulterados no `evidencias.json` e links simbólicos.
+- **Dependências**: 32 pacotes de terceiros, **travados com hash** em `requirements-mcpb.lock` e
+  instalados só como pacotes prontos (`--only-binary`), sem compilar nada. Um pacote adulterado
+  no PyPI é recusado: testado trocando todos os hashes, o `pip` falhou e não instalou nada.
+  `pip-audit` não achou vulnerabilidades conhecidas nessas versões.
+- **Integridade**: o empacotador grava o SHA-256 em `dist\CapturadorEvidencias.mcpb.sha256`.
+
+Para **atualizar as dependências** (num ambiente com `pip-tools` e `pip-audit`):
+
+```bash
+pip-compile --generate-hashes --strip-extras --output-file requirements-mcpb.lock requirements-mcp.txt
+pip-audit -r requirements-mcpb.lock --no-deps --disable-pip
+```
+
+e depois reempacote. O que **não** some, e o que fazer:
+
+1. **Os dados vão para a IA.** Os prints chegam à Anthropic pelo chat. Confirme com a TI se isso é
+   permitido (LGPD/política), mascare dados sensíveis e comece pela pasta de exemplo.
+2. **Texto dentro dos prints pode tentar instruir a IA** (injeção de prompt). A extensão limita
+   o estrago (só cria PDFs na pasta dos testes), mas, com outros conectores ligados na mesma
+   conversa (Drive, Gmail...), o risco cresce: analise evidências numa conversa só com esta
+   extensão e não use "sempre permitir" na ferramenta que grava o PDF.
+3. **Instale só o `.mcpb` que você mesmo gerou** e confira o SHA-256. Nunca instale um `.mcpb` de
+   terceiros sem revisar o código.
+4. **Política da empresa**: administradores de contas de equipe/empresa podem restringir
+   extensões; instalar uma extensão local numa máquina corporativa pode exigir aval da TI.
+
 **Estado**: protótipo. Testado de ponta a ponta pelo protocolo com um cliente MCP (handshake,
 ferramentas, imagem, PDF, recusa de caminhos fora da pasta), mas **ainda não** com o Claude
 Desktop/Claude Code de verdade, e **não incluído no `.exe`** (um `.exe` sem janela não tem
