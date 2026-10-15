@@ -107,11 +107,37 @@ pasta de evidências; nada fora dela é lido ou escrito, e nenhum arquivo é sob
 relatório com o mesmo título vira `(2)`). As leituras são marcadas como somente leitura. O PDF
 sai com o aviso "Rascunho gerado por IA… revisão do testador necessária".
 
-**Instalar** (usa o mesmo `.venv`; requer Python 3.11+):
+**Instalar** (requer Python 3.11+). Use um ambiente à parte, `.venv-mcp`, para não mexer no
+`.venv` do app:
 
 ```bash
-.venv\Scripts\python.exe -m pip install -r requirements-mcp.txt
+python -m venv .venv-mcp
+.venv-mcp\Scripts\python.exe -m pip install -r requirements-mcp.txt
 ```
+
+**Testar sem interferir em nada** (nem na sua configuração do Claude, nem nos seus testes reais):
+
+1. *Autoteste isolado, sem IA.* Cria um teste **fictício** numa pasta temporária, sobe o servidor
+   e conversa com ele pelo protocolo MCP; apaga tudo no fim:
+
+   ```bash
+   .venv-mcp\Scripts\python.exe tools\testar_mcp.py
+   ```
+
+2. *Teste com o Claude de verdade, só com dados de exemplo.* Gere um teste fictício numa pasta
+   separada e aponte o servidor para ela (`CAPTURADOR_PASTA_BASE`), de modo que o Claude nunca
+   veja as suas evidências reais:
+
+   ```bash
+   .venv-mcp\Scripts\python.exe tools\testar_mcp.py --criar-exemplo "C:\Evidencias_TESTE"
+   claude mcp add --env CAPTURADOR_PASTA_BASE="C:\Evidencias_TESTE" --transport stdio evidenciador-teste -- "<pasta do projeto>\.venv-mcp\Scripts\python.exe" "<pasta do projeto>\servidor_mcp.py"
+   ```
+
+   O registro fica no escopo `local` (padrão: só você, só neste projeto; não use `--scope project`,
+   que grava um `.mcp.json` compartilhado). Ao terminar: `claude mcp remove evidenciador-teste`.
+   No Claude desktop, faça uma cópia do `claude_desktop_config.json`, acrescente uma entrada
+   com outro nome (ex.: `evidenciador-teste`, com `env` apontando para a pasta de exemplo) e
+   remova-a depois.
 
 **Registrar no Claude Code**:
 
