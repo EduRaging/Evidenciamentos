@@ -51,7 +51,10 @@ preferir (e que a empresa aprove). Sem chave de API e sem custo.
    janela principal, que abre o último teste; **Trocar…** escolhe outro, inclusive testes antigos).
 2. Preencha o que souber: sistema/ambiente, objetivo, critérios de aceite e observações. A prévia
    do prompt atualiza enquanto o senhor digita. Escolha o que a IA deve gerar: casos de teste,
-   relatório de execução ou os dois.
+   relatório de execução ou os dois. A caixa **Pedir a entrega em PDF** (marcada por padrão) faz o
+   prompt pedir que a IA devolva o resultado já como **arquivo PDF para baixar**, com capa e as
+   imagens das evidências quando ela conseguir. Se a IA não gerar arquivos, o prompt manda que ela
+   avise e entregue o conteúdo em Markdown, pronto para converter em PDF.
 3. **Copiar prompt**, cole na IA e **anexe o PDF** do teste (ele já traz as evidências numeradas
    e com data/hora; o prompt se refere a "Evidência N"). Se a IA não ler imagens dentro de PDF,
    anexe os PNGs numerados da pasta (**Abrir pasta do teste**).

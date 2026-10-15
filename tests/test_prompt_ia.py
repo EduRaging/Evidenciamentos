@@ -40,9 +40,32 @@ class MontarPrompt(unittest.TestCase):
         self.assertIn('"Evidencias - Login.pdf"', montar_prompt(teste_exemplo(), Formulario()))
 
     def test_sem_pdf_pede_anexo_das_imagens(self):
-        prompt = montar_prompt(teste_exemplo(pdf=None), Formulario())
+        prompt = montar_prompt(teste_exemplo(pdf=None), Formulario(entregar_pdf=False))
         self.assertNotIn(".pdf", prompt)
         self.assertIn("Anexei as imagens", prompt)
+
+    def test_pede_a_entrega_em_pdf_por_padrao(self):
+        prompt = montar_prompt(teste_exemplo(), Formulario())
+        self.assertIn("## Entrega em PDF", prompt)
+        self.assertIn("arquivo PDF para eu baixar", prompt)
+        self.assertIn('"Relatório de testes - Login no ERP.pdf"', prompt)
+        self.assertIn("entregar o resultado em um arquivo PDF", prompt)  # também na tarefa inicial
+        self.assertIn("avise logo no início", prompt)  # plano B se a IA não gerar arquivos
+        self.assertIn("Markdown", prompt)
+
+    def test_sem_entrega_em_pdf_quando_desligado(self):
+        prompt = montar_prompt(teste_exemplo(), Formulario(entregar_pdf=False))
+        self.assertNotIn("## Entrega em PDF", prompt)
+        self.assertNotIn("arquivo PDF para eu baixar", prompt)
+        self.assertNotIn("entregar o resultado", prompt)
+
+    def test_nome_sugerido_do_pdf_depende_da_saida_e_e_seguro(self):
+        teste = teste_exemplo()
+        teste.nome_teste = "Login/Logout: perfis"
+        casos = montar_prompt(teste, Formulario(saida="casos"))
+        relatorio = montar_prompt(teste, Formulario(saida="relatorio"))
+        self.assertIn('"Casos de teste - Login-Logout- perfis.pdf"', casos)
+        self.assertIn('"Relatório de testes - Login-Logout- perfis.pdf"', relatorio)
 
     def test_campos_vazios_viram_nao_informado(self):
         prompt = montar_prompt(teste_exemplo(), Formulario())

@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .metadados import PastaTeste
+from .sessao import nome_seguro
 
 SAIDAS = {"casos": "Casos de teste", "relatorio": "Relatório de execução", "ambos": "Os dois"}
 NAO_INFORMADO = "não informado"
@@ -48,6 +49,7 @@ class Formulario:
     criterios: str = ""
     observacoes: str = ""
     saida: str = "ambos"  # chave de SAIDAS
+    entregar_pdf: bool = True  # pede à IA o resultado já em arquivo PDF
 
 
 def _ou_nao_informado(texto: str) -> str:
@@ -82,6 +84,21 @@ def _anexo(teste: PastaTeste) -> str:
     return "Anexei as imagens das evidências, com os nomes de arquivo da lista abaixo."
 
 
+def _secao_entrega(nome_teste: str, saida: str) -> str:
+    titulo = "Casos de teste" if saida == "casos" else "Relatório de testes"
+    sugestao = f"{titulo} - {nome_seguro(nome_teste)}.pdf"
+    return (
+        "## Entrega em PDF\n"
+        f'Entregue o resultado como um **arquivo PDF para eu baixar** (sugestão de nome: "{sugestao}"), '
+        "com uma capa curta (nome do teste, sistema/ambiente, testador e data) seguida das seções acima.\n"
+        "- Use tabelas legíveis (com quebra de linha dentro das células) e paginação limpa.\n"
+        '- Se você conseguir, inclua no PDF as imagens das evidências, identificadas como "Evidência N", '
+        "junto dos casos de teste correspondentes.\n"
+        "- Se você não conseguir gerar arquivos, avise logo no início e entregue o conteúdo completo em "
+        "Markdown, pronto para eu converter em PDF."
+    )
+
+
 def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
     saida = form.saida if form.saida in SAIDAS else "ambos"
     secoes = []
@@ -91,6 +108,7 @@ def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
         secoes.append(_SECAO_RELATORIO)
     if saida == "ambos":
         secoes.append("Faça primeiro os casos de teste e depois o relatório, reaproveitando os mesmos IDs.")
+    tarefa = _TAREFAS[saida] + (" e entregar o resultado em um arquivo PDF" if form.entregar_pdf else "")
 
     criterios = form.criterios.strip()
     if not criterios:
@@ -98,7 +116,7 @@ def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
 
     partes = [
         "Você é um analista de qualidade (QA) sênior. Vou te enviar as evidências de um teste "
-        f"manual de software e preciso que você faça o seguinte: {_TAREFAS[saida]}.",
+        f"manual de software e preciso que você faça o seguinte: {tarefa}.",
         "## Contexto do teste\n"
         f"- Teste: {teste.nome_teste}\n"
         f"- Sistema / ambiente: {_ou_nao_informado(form.ambiente)}\n"
@@ -111,4 +129,6 @@ def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
         f"## Regras\n{_REGRAS}",
         "## O que produzir\n" + "\n\n".join(secoes),
     ]
+    if form.entregar_pdf:
+        partes.append(_secao_entrega(teste.nome_teste, saida))
     return "\n\n".join(partes) + "\n"

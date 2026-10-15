@@ -41,6 +41,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     var_titulo = tk.StringVar()
     var_ambiente = tk.StringVar()
     var_saida = tk.StringVar(value="ambos")
+    var_pdf = tk.BooleanVar(value=True)
     var_status = tk.StringVar()
 
     # --- teste escolhido
@@ -69,6 +70,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     opcoes.grid(row=5, column=1, columnspan=2, sticky="w", padx=8, pady=(10, 0))
     for chave, rotulo in SAIDAS.items():
         ttk.Radiobutton(opcoes, text=rotulo, value=chave, variable=var_saida).pack(side="left", padx=(0, 14))
+    ttk.Checkbutton(opcoes, text="Pedir a entrega em PDF", variable=var_pdf).pack(side="left", padx=(10, 0))
 
     # --- prévia
     ttk.Label(quadro, text="Prévia do prompt (é isto que será copiado)").grid(
@@ -105,6 +107,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
             criterios=campos["criterios"].get("1.0", "end"),
             observacoes=campos["observacoes"].get("1.0", "end"),
             saida=var_saida.get(),
+            entregar_pdf=var_pdf.get(),
         )
 
     def prompt_atual() -> str:
@@ -159,6 +162,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     botao_pasta.configure(command=lambda: os.startfile(estado["teste"].pasta))
     var_ambiente.trace_add("write", agendar)
     var_saida.trace_add("write", agendar)
+    var_pdf.trace_add("write", agendar)
     for campo in campos.values():
         campo.bind("<KeyRelease>", agendar)
 
