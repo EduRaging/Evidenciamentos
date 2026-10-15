@@ -1,4 +1,4 @@
-"""Janela "Preparar prompt para IA": monta o texto, mostra a prévia e copia para a área de transferência."""
+"""Janela "Preparar prompt para IA": monta o texto, mostra a prévia, envia ao Claude ou copia."""
 from __future__ import annotations
 
 import os
@@ -6,11 +6,11 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from . import metadados
+from . import claude_desktop, metadados
 from .prompt_ia import SAIDAS, Formulario, montar_prompt
 
 ARQUIVO_PROMPT = "Prompt para IA.txt"
-AVISO = ("Antes de anexar, confira se as evidências não têm dados pessoais ou sensíveis e se a "
+AVISO = ("Antes de enviar ou anexar, confira se as evidências não têm dados pessoais ou sensíveis e se a "
          "ferramenta de IA que o senhor vai usar é aprovada pela empresa.")
 
 
@@ -30,8 +30,8 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
 
     janela = tk.Toplevel(pai)
     janela.title("Preparar prompt para IA")
-    janela.geometry("780x760")
-    janela.minsize(700, 620)
+    janela.geometry("780x820")
+    janela.minsize(700, 680)
     janela.transient(pai)
 
     quadro = ttk.Frame(janela, padding=14)
@@ -43,6 +43,8 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     var_saida = tk.StringVar(value="ambos")
     var_pdf = tk.BooleanVar(value=True)
     var_sugerir = tk.BooleanVar(value=True)
+    var_extensao = tk.BooleanVar(value=True)
+    var_dica = tk.StringVar()
     var_status = tk.StringVar()
 
     # --- teste escolhido
@@ -78,9 +80,13 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
         side="left", padx=(10, 0))
     ttk.Checkbutton(opcoes, text="Sugerir casos de teste adicionais (técnicas ISTQB/BSTQB)",
                     variable=var_sugerir).pack(anchor="w", pady=(4, 0))
+    ttk.Checkbutton(opcoes, text="Claude com a extensão instalada (ele lê as evidências direto da pasta)",
+                    variable=var_extensao).pack(anchor="w", pady=(4, 0))
+    ttk.Label(opcoes, textvariable=var_dica, foreground="#555", wraplength=560, justify="left").pack(
+        anchor="w", padx=(22, 0))
 
     # --- prévia
-    ttk.Label(quadro, text="Prévia do prompt (é isto que será copiado)").grid(
+    ttk.Label(quadro, text="Prévia do prompt (é isto que será enviado ou copiado)").grid(
         row=6, column=0, columnspan=3, sticky="w", pady=(14, 2))
     moldura = ttk.Frame(quadro)
     moldura.grid(row=7, column=0, columnspan=3, sticky="nsew")
@@ -98,10 +104,12 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
     # --- botões
     rodape = ttk.Frame(quadro)
     rodape.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+    botao_enviar = ttk.Button(rodape, text="Enviar ao Claude")
+    botao_enviar.pack(side="left", ipady=4, ipadx=8)
     botao_copiar = ttk.Button(rodape, text="Copiar prompt")
-    botao_copiar.pack(side="left", ipady=4, ipadx=8)
+    botao_copiar.pack(side="left", padx=8)
     botao_pasta = ttk.Button(rodape, text="Abrir pasta do teste")
-    botao_pasta.pack(side="left", padx=8)
+    botao_pasta.pack(side="left")
     ttk.Button(rodape, text="Fechar", command=janela.destroy).pack(side="right")
     ttk.Label(quadro, textvariable=var_status, foreground="#1b5e20", wraplength=700,
               justify="left").grid(row=10, column=0, columnspan=3, sticky="w", pady=(8, 0))
@@ -116,6 +124,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
             saida=var_saida.get(),
             entregar_pdf=var_pdf.get(),
             sugerir_casos=var_sugerir.get(),
+            via_mcp=var_extensao.get(),
         )
 
     def prompt_atual() -> str:
@@ -132,25 +141,50 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
             return  # janela fechada enquanto a atualização estava agendada
         teste = estado["teste"]
         var_titulo.set(f"{teste.nome_teste}  ({len(teste.evidencias)} evidências)")
+        var_dica.set(f'A extensão só enxerga os testes da pasta "{teste.pasta.parent}": é essa a pasta '
+                     "que ela precisa ter configurada." if var_extensao.get() else "")
 
     def agendar(*_args) -> None:
         if estado["agendado"]:
             janela.after_cancel(estado["agendado"])
         estado["agendado"] = janela.after(250, atualizar_previa)
 
-    def copiar() -> None:
-        texto = prompt_atual()
+    def guardar_copia(texto: str) -> str:
+        """Põe o texto na área de transferência e salva um .txt na pasta do teste; devolve o aviso."""
         janela.clipboard_clear()
         janela.clipboard_append(texto)
         janela.update()
         destino = estado["teste"].pasta / ARQUIVO_PROMPT
         try:
             destino.write_text(texto, encoding="utf-8-sig")  # BOM: o Bloco de Notas acerta os acentos
-            salvo = f' Também salvo na pasta do teste como "{ARQUIVO_PROMPT}".'
+            return f' Também salvo na pasta do teste como "{ARQUIVO_PROMPT}".'
         except OSError:
-            salvo = ""
-        anexo = estado["teste"].pdf or "as imagens das evidências"
-        var_status.set(f"Prompt copiado! Cole na IA e anexe: {anexo}.{salvo}")
+            return ""
+
+    def a_anexar() -> str:
+        """O que falta anexar à mão: nada, se o Claude lê as evidências pela extensão."""
+        if var_extensao.get():
+            return ""
+        return f" Anexe: {estado['teste'].pdf or 'as imagens das evidências'}."
+
+    def copiar() -> None:
+        salvo = guardar_copia(prompt_atual())
+        var_status.set(f"Prompt copiado! Cole na IA.{a_anexar()}{salvo}")
+
+    def enviar() -> None:
+        texto = prompt_atual()
+        resultado = claude_desktop.abrir_conversa(texto)
+        if resultado == claude_desktop.PREENCHIDO:
+            var_status.set("O Claude abriu com o prompt preenchido. Confira e aperte Enter para enviar: "
+                           f"nada sai do computador antes disso.{a_anexar()}")
+            return
+        salvo = guardar_copia(texto)  # o link não deu certo: o prompt segue pela área de transferência
+        if resultado == claude_desktop.VAZIA:
+            var_status.set("O prompt é grande demais para ir no link. O Claude abriu em branco e o prompt "
+                           f"está copiado: cole com Ctrl+V.{a_anexar()}{salvo}")
+        else:
+            var_status.set("Não encontrei o Claude desktop neste computador. O prompt foi copiado: cole na "
+                           f"IA que preferir.{a_anexar()}{salvo}")
 
     def trocar() -> None:
         escolhida = filedialog.askdirectory(parent=janela, initialdir=pasta_base or None,
@@ -166,12 +200,14 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path, pasta_base: str) -> Path:
         atualizar_previa()
 
     botao_trocar.configure(command=trocar)
+    botao_enviar.configure(command=enviar)
     botao_copiar.configure(command=copiar)
     botao_pasta.configure(command=lambda: os.startfile(estado["teste"].pasta))
     var_ambiente.trace_add("write", agendar)
     var_saida.trace_add("write", agendar)
     var_pdf.trace_add("write", agendar)
     var_sugerir.trace_add("write", agendar)
+    var_extensao.trace_add("write", agendar)
     for campo in campos.values():
         campo.bind("<KeyRelease>", agendar)
 

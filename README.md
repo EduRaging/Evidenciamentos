@@ -76,8 +76,9 @@ colando o PDF já copiado.
 
 ## Prompt para IA (casos de teste e relatório)
 
-O app não se conecta a nenhuma IA: ele monta um **prompt pronto** para o senhor colar na IA que
-preferir (e que a empresa aprove). Sem chave de API e sem custo.
+O app não se conecta a nenhuma IA: ele monta um **prompt pronto** para o senhor enviar ao Claude
+desktop (um clique abre a conversa com o texto preenchido) ou colar na IA que preferir (e que a
+empresa aprove). Sem chave de API e sem custo, e sem tráfego de rede do app.
 
 1. Ao finalizar um teste, clique em **Preparar prompt para IA…** (ou use o botão de mesmo nome na
    janela principal, que abre o último teste; **Trocar…** escolhe outro, inclusive testes antigos).
@@ -95,9 +96,17 @@ preferir (e que a empresa aprove). Sem chave de API e sem custo.
    Os casos sugeridos vêm identificados (`CS-01`…), com técnica, prioridade por risco e a evidência
    que motivou a ideia, e **sempre marcados como "não executado"**, separados do que foi testado.
    As técnicas de caixa-branca ficam de fora, porque o testador só vê a tela.
-3. **Copiar prompt**, cole na IA e **anexe o PDF** do teste (ele já traz as evidências numeradas
-   e com data/hora; o prompt se refere a "Evidência N"). Se a IA não ler imagens dentro de PDF,
-   anexe os PNGs numerados da pasta (**Abrir pasta do teste**).
+3. **Enviar ao Claude** abre o **Claude desktop** numa conversa nova **com o prompt já preenchido**:
+   o senhor só confere e aperta Enter (o Claude apenas preenche a caixa; nada sai do computador
+   antes disso). Com a extensão do Claude instalada (veja abaixo), a caixa **Claude com a extensão
+   instalada** (marcada por padrão) faz o prompt mandar a IA ler as evidências direto da pasta e
+   gravar o PDF lá, sem anexar nada; a janela mostra a pasta que a extensão precisa ter
+   configurada. Sem a extensão, desmarque a caixa: o prompt volta ao formato de anexos.
+   Se o prompt passar de ~12 mil caracteres (limite do link do Claude) ou o Claude desktop não
+   estiver instalado, o app copia o prompt e avisa para colar (Ctrl+V).
+   Para outra IA, use **Copiar prompt**, cole e **anexe o PDF** do teste (ele já traz as evidências
+   numeradas e com data/hora; o prompt se refere a "Evidência N"). Se a IA não ler imagens dentro
+   de PDF, anexe os PNGs numerados da pasta (**Abrir pasta do teste**).
 
 O prompt manda a IA se basear só no que está visível, escrever "não evidenciado" quando não der
 para confirmar, citar o número da evidência, não reproduzir dados pessoais e **sugerir** o status

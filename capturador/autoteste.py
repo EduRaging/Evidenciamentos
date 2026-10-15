@@ -14,8 +14,8 @@ from pathlib import Path
 
 from PIL import Image, ImageTk
 
-from . import (__version__, atalhos, captura, dialogo_prompt, metadados, painel_pdfs, recursos,
-               registro_pdfs, winutil)
+from . import (__version__, atalhos, captura, claude_desktop, dialogo_prompt, metadados, painel_pdfs,
+               recursos, registro_pdfs, winutil)
 from .pdf_relatorio import _registrar_fontes
 from .prompt_ia import Formulario, montar_prompt
 from .sessao import Sessao
@@ -85,6 +85,20 @@ def _prompt_ia() -> str:
     return f"prompt de {len(prompt)} caracteres com PDF e evidências"
 
 
+def _envio_ao_claude() -> str:
+    """Monta o link do prompt completo e procura o Claude desktop (sem abri-lo)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        teste = metadados.ler(_finalizar_exemplo(Path(tmp)))
+        prompt = montar_prompt(teste, Formulario(via_mcp=True))
+    if len(prompt) > claude_desktop.LIMITE_PROMPT:
+        raise AssertionError(f"prompt de {len(prompt)} caracteres passa do limite do link")
+    link = claude_desktop.montar_link(prompt)
+    comando = claude_desktop.comando_para_abrir(link)
+    if comando is None:
+        return "link montado; Claude desktop não encontrado (o app copia o prompt para colar)"
+    return f"link de {len(link)} caracteres pronto para o {Path(comando[0]).name} registrado"
+
+
 def _registro_de_pdfs() -> str:
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp) / "base"
@@ -119,6 +133,7 @@ VERIFICACOES = (
     ("atalhos globais", _atalhos_globais),
     ("sessão, pasta e PDF", _sessao_e_pdf),
     ("prompt para IA", _prompt_ia),
+    ("envio ao Claude desktop", _envio_ao_claude),
     ("registro de PDFs", _registro_de_pdfs),
 )
 
