@@ -7,11 +7,13 @@ Todo texto é escapado: nada do conteúdo vira marcação do PDF.
 from __future__ import annotations
 
 import html
+import io
 import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import BinaryIO
 
 from PIL import Image as PILImage
 from reportlab.lib import colors
@@ -24,6 +26,9 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (HRFlowable, Image, KeepTogether, ListFlowable, ListItem, PageBreak,
                                 Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle)
 
+from .imagens import abrir_png
+
+LADO_MAX_PDF = 1800  # px: ~270 dpi na largura útil da página; acima disso só incha o PDF
 MARGEM = 18 * mm
 LARGURA_UTIL = A4[0] - 2 * MARGEM
 ALTURA_MAX_IMAGEM = 105 * mm  # duas evidências cabem por página
@@ -82,17 +87,44 @@ def _estilos() -> dict[str, ParagraphStyle]:
 
 
 def _inline(texto: str) -> str:
-    """Escapa o texto e converte a marcação inline segura (negrito, itálico, código, <br>)."""
+    """Escapa o texto e converte a marcação inline segura (negrito, itálico, código, <br>).
+
+    Os trechos formatados têm tamanho MÁXIMO: sem isso, `.+?` repetido em milhares de pontos de
+    partida custa tempo quadrático e um texto malicioso congela o servidor inteiro.
+    """
     t = html.escape(texto, quote=False)
-    t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
-    t = re.sub(r"(?<![*\w])\*(?!\s)(.+?)(?<!\s)\*(?![*\w])", r"<i>\1</i>", t)
-    t = re.sub(r"`(.+?)`", r'<font face="Courier">\1</font>', t)
+    t = re.sub(r"\*\*(.{1,500}?)\*\*", r"<b>\1</b>", t)
+    t = re.sub(r"(?<![*\w])\*(?!\s)(.{1,300}?)(?<!\s)\*(?![*\w])", r"<i>\1</i>", t)
+    t = re.sub(r"`(.{1,300}?)`", r'<font face="Courier">\1</font>', t)
     return re.sub(r"&lt;br\s*/?&gt;", "<br/>", t, flags=re.IGNORECASE)
 
 
+def _paragrafo(texto: str, estilo: ParagraphStyle) -> Paragraph:
+    """Parágrafo com a marcação convertida; se ela vier mal aninhada (`**a *b** c*`), o
+    ReportLab recusa, e então vai o texto puro, escapado, em vez de perder o relatório."""
+    try:
+        return Paragraph(_inline(texto), estilo)
+    except ValueError:
+        return Paragraph(html.escape(texto, quote=False), estilo)
+
+
+_CELULA_SEPARADOR = re.compile(r":?-{2,}:?")  # linear: fullmatch numa célula curta e sem repetição aninhada
 _LINHA_TABELA = re.compile(r"^\s*\|.*\|\s*$")
-_SEPARADOR = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
 _ITEM = re.compile(r"^\s*([-*+]|\d+[.)])\s+(.*)$")
+
+
+def _eh_separador(linha: str) -> bool:
+    """Linha `|---|:--:|` que separa o cabeçalho de uma tabela (tempo linear no tamanho da linha)."""
+    celulas = [c.strip() for c in linha.strip().strip("|").split("|")]
+    return bool(celulas) and all(_CELULA_SEPARADOR.fullmatch(c) for c in celulas)
+
+
+def _cabecalho(linha: str) -> tuple[int, str] | None:
+    """(nível, texto) de uma linha `# Título` / `## Título ##` / `### Título`, ou None."""
+    nivel = len(linha) - len(linha.lstrip("#"))
+    if not 1 <= nivel <= 3 or len(linha) == nivel or not linha[nivel].isspace():
+        return None
+    return nivel, linha[nivel:].strip().rstrip("#").rstrip()
 
 
 def _celulas(linha: str) -> list[str]:
@@ -108,7 +140,7 @@ def _tabela(linhas: list[str], est: dict[str, ParagraphStyle]) -> Table:
     corpo = [_celulas(l) for i, l in enumerate(linhas) if i != 1]  # linha 1 é o separador
     colunas = max(len(l) for l in corpo)
     corpo = [l + [""] * (colunas - len(l)) for l in corpo]
-    dados = [[Paragraph(_inline(c), est["celula_cab" if i == 0 else "celula"]) for c in l]
+    dados = [[_paragrafo(c, est["celula_cab" if i == 0 else "celula"]) for c in l]
              for i, l in enumerate(corpo)]
     # cada coluna tem no mínimo a largura da sua maior palavra (nada de "CT-0/1"); o resto da
     # largura útil é dividido na proporção do tamanho do conteúdo
@@ -142,14 +174,14 @@ def _blocos(markdown: str, est: dict[str, ParagraphStyle]) -> list:
 
     def fechar_paragrafo():
         if paragrafo:
-            saida.append(Paragraph(_inline(" ".join(paragrafo)), est["corpo"]))
+            saida.append(_paragrafo(" ".join(paragrafo), est["corpo"]))
             paragrafo.clear()
 
     def fechar_lista():
         nonlocal numerada
         if itens:
             saida.append(ListFlowable(
-                [ListItem(Paragraph(_inline(i), est["corpo"]), leftIndent=14) for i in itens],
+                [ListItem(_paragrafo(i, est["corpo"]), leftIndent=14) for i in itens],
                 bulletType="1" if numerada else "bullet", bulletFormat="%s." if numerada else None,
                 bulletFontSize=8.5, leftIndent=16))
             itens.clear()
@@ -166,11 +198,11 @@ def _blocos(markdown: str, est: dict[str, ParagraphStyle]) -> list:
             fechar_lista()
             saida.append(HRFlowable(width="100%", color=colors.HexColor("#c8c8c8"), spaceBefore=4,
                                     spaceAfter=6))
-        elif (achado := re.match(r"^(#{1,3})\s+(.*?)\s*#*\s*$", linha)):
+        elif (cabecalho := _cabecalho(linha)):
             fechar_paragrafo()
             fechar_lista()
-            saida.append(Paragraph(_inline(achado.group(2)), est[f"h{len(achado.group(1))}"]))
-        elif _LINHA_TABELA.match(linha) and i + 1 < len(linhas) and _SEPARADOR.match(linhas[i + 1]):
+            saida.append(_paragrafo(cabecalho[1], est[f"h{cabecalho[0]}"]))
+        elif _LINHA_TABELA.match(linha) and i + 1 < len(linhas) and _eh_separador(linhas[i + 1]):
             fechar_paragrafo()
             fechar_lista()
             bloco = []
@@ -199,20 +231,27 @@ def _blocos(markdown: str, est: dict[str, ParagraphStyle]) -> list:
 def _anexo_evidencias(evidencias: list[EvidenciaPdf], est: dict[str, ParagraphStyle]) -> list:
     blocos: list = [PageBreak(), Paragraph("Evidências", est["h1"])]
     for ev in evidencias:
-        with PILImage.open(ev.caminho) as img:
-            largura, altura = img.size
+        # abre só como PNG, recusa imagens enormes e reduz antes de embutir: o PDF fica menor e uma
+        # imagem gigante não consome gigabytes de memória
+        with abrir_png(ev.caminho) as original:
+            original.thumbnail((LADO_MAX_PDF, LADO_MAX_PDF), PILImage.Resampling.LANCZOS)
+            reduzida = original.convert("RGB")
+        largura, altura = reduzida.size
+        dados = io.BytesIO()
+        reduzida.save(dados, "PNG")
+        dados.seek(0)
         escala = min(LARGURA_UTIL / largura, ALTURA_MAX_IMAGEM / altura, 1.0)
         hora = f" — {ev.momento:%d/%m/%Y %H:%M:%S}" if ev.momento else ""
-        legenda = Paragraph(_inline(f"Evidência {ev.numero} — {ev.rotulo}{hora}"), est["legenda"])
-        imagem = Image(str(ev.caminho), width=largura * escala, height=altura * escala, hAlign="LEFT")
+        legenda = _paragrafo(f"Evidência {ev.numero} — {ev.rotulo}{hora}", est["legenda"])
+        imagem = Image(dados, width=largura * escala, height=altura * escala, hAlign="LEFT")
         imagem.hAlign = "LEFT"
         blocos.append(KeepTogether([legenda, imagem, Spacer(1, 10)]))
     return blocos
 
 
-def gerar_pdf_de_markdown(destino: Path, titulo: str, markdown: str, subtitulo: str = "",
+def gerar_pdf_de_markdown(destino: Path | BinaryIO, titulo: str, markdown: str, subtitulo: str = "",
                           evidencias: list[EvidenciaPdf] | None = None) -> int:
-    """Gera o PDF e devolve o número de páginas."""
+    """Gera o PDF (num caminho ou num arquivo já aberto) e devolve o número de páginas."""
     est = _estilos()
     normal = est["corpo"].fontName
 
@@ -223,12 +262,12 @@ def gerar_pdf_de_markdown(destino: Path, titulo: str, markdown: str, subtitulo: 
         canvas.drawCentredString(A4[0] / 2, 10 * mm, f"Página {doc.page}")
         canvas.restoreState()
 
-    doc = SimpleDocTemplate(str(destino), pagesize=A4, leftMargin=MARGEM, rightMargin=MARGEM,
-                            topMargin=MARGEM, bottomMargin=16 * mm, title=titulo,
-                            author="Capturador de Evidências")
-    historia = [Paragraph(_inline(titulo), est["titulo"])]
+    doc = SimpleDocTemplate(destino if hasattr(destino, "write") else str(destino), pagesize=A4,
+                            leftMargin=MARGEM, rightMargin=MARGEM, topMargin=MARGEM,
+                            bottomMargin=16 * mm, title=titulo, author="Capturador de Evidências")
+    historia = [_paragrafo(titulo, est["titulo"])]
     if subtitulo:
-        historia.append(Paragraph(_inline(subtitulo), est["subtitulo"]))
+        historia.append(_paragrafo(subtitulo, est["subtitulo"]))
     historia.append(HRFlowable(width="100%", color=AZUL, thickness=1.2, spaceAfter=8))
     historia += _blocos(markdown, est)
     if evidencias:

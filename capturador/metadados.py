@@ -63,8 +63,20 @@ def ler(pasta: Path | str) -> PastaTeste:
         raise ValueError("A pasta informada não existe.")
     try:
         return _ler_json(pasta)
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError):
+        # JSON ausente, corrompido ou hostil (número gigante, aninhamento extremo...): lê pelos arquivos
         return _varrer(pasta)
+
+
+LIMITE_JSON_BYTES = 1_000_000  # um evidencias.json legítimo tem poucos KB
+MAX_EVIDENCIAS = 200
+_CONTROLE = re.compile(r"[\x00-\x1f\x7f​-‏‪-‮⁦-⁩]")
+
+
+def _texto_seguro(valor, limite: int = 200) -> str:
+    """Texto de uma linha só, sem caracteres de controle nem de direção (o JSON pode ter sido
+    adulterado e estes campos vão parar dentro do prompt da IA), e com tamanho limitado."""
+    return re.sub(r"\s+", " ", _CONTROLE.sub(" ", str(valor))).strip()[:limite]
 
 
 def _nome_simples(nome: str) -> str:
@@ -75,32 +87,43 @@ def _nome_simples(nome: str) -> str:
 
 
 def _ler_json(pasta: Path) -> PastaTeste:
-    dados = json.loads((pasta / ARQUIVO).read_text(encoding="utf-8"))
+    arquivo = pasta / ARQUIVO
+    if arquivo.stat().st_size > LIMITE_JSON_BYTES:
+        raise ValueError(f"{ARQUIVO} grande demais")
+    dados = json.loads(arquivo.read_text(encoding="utf-8"))
+    brutas = dados["evidencias"]
+    if not isinstance(brutas, list) or len(brutas) > MAX_EVIDENCIAS:
+        raise ValueError(f"Lista de evidências inválida em {ARQUIVO}")
     evidencias = [
         EvidenciaInfo(
             numero=int(e["numero"]),
             arquivo=_nome_simples(str(e["arquivo"])),
-            rotulo=str(e["rotulo"]),
-            momento=datetime.fromisoformat(e["hora"]) if e.get("hora") else None,
+            rotulo=_texto_seguro(e["rotulo"]),
+            # sem fuso: datas com e sem fuso misturadas não podem ser comparadas (TypeError)
+            momento=datetime.fromisoformat(e["hora"]).replace(tzinfo=None) if e.get("hora") else None,
         )
-        for e in dados["evidencias"]
+        for e in brutas
     ]
     pdf = dados.get("pdf")
-    return PastaTeste(pasta, str(dados["nome_teste"]), str(dados.get("testador", "")),
+    return PastaTeste(pasta, _texto_seguro(dados["nome_teste"]), _texto_seguro(dados.get("testador", "")),
                       _nome_simples(str(pdf)) if pdf else None, evidencias)
 
 
 def _varrer(pasta: Path) -> PastaTeste:
     evidencias = []
-    for arquivo in sorted(pasta.iterdir()):
+    try:
+        arquivos = sorted(pasta.iterdir())
+        pdfs = sorted(p.name for p in pasta.glob("*.pdf"))
+    except OSError as exc:  # sem permissão, pasta sumiu...
+        raise ValueError("Não consegui ler esta pasta.") from exc
+    for arquivo in arquivos:
         achado = _PNG.match(arquivo.name)
-        if achado:
+        if achado and len(evidencias) < MAX_EVIDENCIAS:
             tipo = achado.group(2).lower()
             evidencias.append(EvidenciaInfo(int(achado.group(1)), arquivo.name,
                                             _ROTULOS.get(tipo, tipo)))
-    pdfs = sorted(p.name for p in pasta.glob("*.pdf"))
     if not evidencias and not pdfs:
         raise ValueError("Esta pasta não parece ser de um teste do Capturador "
                          "(não encontrei os PNGs numerados nem o PDF).")
-    nome = _PREFIXO_DATA.sub("", pasta.name)
+    nome = _texto_seguro(_PREFIXO_DATA.sub("", pasta.name))
     return PastaTeste(pasta, nome, "", pdfs[0] if pdfs else None, evidencias)

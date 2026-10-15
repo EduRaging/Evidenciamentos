@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import os
+import threading
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -21,6 +22,7 @@ from mcp.types import ToolAnnotations
 from PIL import Image as PILImage
 
 from . import metadados
+from .imagens import abrir_png
 from .metadados import PastaTeste
 from .prompt_ia import SAIDAS, Formulario, montar_prompt
 from .relatorio_md import EvidenciaPdf, gerar_pdf_de_markdown
@@ -29,6 +31,8 @@ from .sessao import nome_seguro
 LADO_MAXIMO = 1568  # px; acima disso a IA reduz a imagem de qualquer jeito e o custo só sobe
 MAX_MARKDOWN = 200_000
 MAX_TITULO = 150
+MAX_PDFS_POR_TESTE = 100  # teto de gravação: títulos diferentes criam arquivos novos sem limite
+_trava_gravacao = threading.Lock()  # o SDK roda as ferramentas em threads; a gravação é uma por vez
 AVISO_IA = "Rascunho gerado por IA a partir das evidências. Revisão do testador necessária."
 
 INSTRUCOES = (
@@ -47,7 +51,8 @@ def _erros_previstos(funcao):
     """Faz as validações (ValueError) chegarem à IA com a mensagem, para ela se corrigir.
 
     Qualquer outra exceção continua virando um erro genérico no cliente, de propósito: não
-    expõe detalhes internos nem caminhos da máquina.
+    expõe detalhes internos. (Os caminhos que as ferramentas devolvem de propósito, como o do
+    arquivo gerado, são da pasta que o próprio usuário configurou.)
     """
     @wraps(funcao)
     def interna(*args, **kwargs):
@@ -75,25 +80,41 @@ def _base() -> Path:
     return base
 
 
+def _e_atalho(caminho: Path) -> bool:
+    """Link simbólico ou junction: pasta/arquivo que na verdade aponta para outro lugar."""
+    return caminho.is_symlink() or os.path.isjunction(caminho)
+
+
 def _resolver_teste(teste: str) -> PastaTeste:
     """Pasta do teste pelo nome, confinada à pasta de evidências. ValueError se inválida."""
     nome = (teste or "").strip()
-    if not nome or nome in (".", "..") or any(c in nome for c in '/\\:\x00'):
+    if (not nome or nome in (".", "..") or nome.startswith(("_", "."))  # pastas de trabalho/ocultas
+            or any(c in nome for c in '/\\:\x00')):
         raise ValueError("Informe só o nome da pasta do teste, como aparece em `listar_testes`.")
     base = _base().resolve()
-    pasta = (base / nome).resolve()
+    candidata = base / nome
+    nao_encontrado = ValueError(f"Teste não encontrado: {nome!r}. Use `listar_testes` para ver os disponíveis.")
+    if _e_atalho(candidata):  # um atalho para fora da pasta de evidências nunca é um teste
+        raise nao_encontrado
+    pasta = candidata.resolve()
     if pasta.parent != base or not pasta.is_dir():
-        raise ValueError(f"Teste não encontrado: {nome!r}. Use `listar_testes` para ver os disponíveis.")
+        raise nao_encontrado
     return metadados.ler(pasta)
 
 
 def _caminho_da_evidencia(dados: PastaTeste, ev: metadados.EvidenciaInfo) -> Path | None:
     """Arquivo da evidência, só se estiver realmente DENTRO da pasta do teste.
 
-    O .resolve() segue atalhos/links simbólicos: um link para fora da pasta é recusado.
+    Compara com a pasta JÁ validada (não a recalcula): se ela virar um atalho entre a validação e o
+    uso, o `resolve()` seguiria o atalho e as duas pontas apontariam para fora, passando na checagem.
     """
-    caminho = (dados.pasta / ev.arquivo).resolve()
-    if caminho.parent != dados.pasta.resolve() or not caminho.is_file():
+    if _e_atalho(dados.pasta):
+        return None
+    candidato = dados.pasta / ev.arquivo
+    if _e_atalho(candidato):
+        return None
+    caminho = candidato.resolve()
+    if caminho.parent != dados.pasta or not caminho.is_file():
         return None
     return caminho
 
@@ -124,19 +145,20 @@ def listar_testes(limite: int = 20) -> dict[str, Any]:
     base = _base()
     achados = []
     for pasta in base.iterdir():
-        if not pasta.is_dir() or pasta.name.startswith(("_", ".")):
-            continue
         try:
+            if not pasta.is_dir() or pasta.name.startswith(("_", ".")) or _e_atalho(pasta):
+                continue
             dados = metadados.ler(pasta)
-        except ValueError:
-            continue
-        achados.append((pasta.stat().st_mtime, {
-            "teste": pasta.name,
-            "nome_teste": dados.nome_teste,
-            "evidencias": len(dados.evidencias),
-            "pdf": dados.pdf,
-            "data": datetime.fromtimestamp(pasta.stat().st_mtime).isoformat(timespec="minutes"),
-        }))
+            modificada = pasta.stat().st_mtime
+            achados.append((modificada, {
+                "teste": pasta.name,
+                "nome_teste": dados.nome_teste,
+                "evidencias": len(dados.evidencias),
+                "pdf": dados.pdf,
+                "data": datetime.fromtimestamp(modificada).isoformat(timespec="minutes"),
+            }))
+        except Exception:  # noqa: BLE001 - uma pasta ruim (sem permissão, JSON malicioso) não pode
+            continue  # derrubar a listagem de todos os testes
     achados.sort(key=lambda par: par[0], reverse=True)
     return {"pasta_base": str(base), "testes": [item for _, item in achados[:max(1, min(limite, 100))]]}
 
@@ -168,11 +190,11 @@ def ver_evidencia(teste: str, numero: int) -> Image:
     caminho = _caminho_da_evidencia(dados, ev)
     if caminho is None:
         raise ValueError(f"O arquivo da evidência {numero} não foi encontrado na pasta do teste.")
-    with PILImage.open(caminho) as img:
-        img = img.convert("RGB")
-        img.thumbnail((LADO_MAXIMO, LADO_MAXIMO), PILImage.Resampling.LANCZOS)
-        saida = io.BytesIO()
-        img.save(saida, "PNG", optimize=True)
+    with abrir_png(caminho) as original:  # só PNG e com limite de pixels (ver imagens.py)
+        original.thumbnail((LADO_MAXIMO, LADO_MAXIMO), PILImage.Resampling.LANCZOS)
+        reduzida = original.convert("RGB")  # converte DEPOIS de reduzir: poupa memória
+    saida = io.BytesIO()
+    reduzida.save(saida, "PNG", optimize=True)
     return Image(data=saida.getvalue(), format="png")
 
 
@@ -193,23 +215,40 @@ def salvar_relatorio_pdf(teste: str, titulo: str, conteudo_markdown: str,
     if not (conteudo_markdown or "").strip() or len(conteudo_markdown) > MAX_MARKDOWN:
         raise ValueError(f"O conteúdo é obrigatório e deve ter até {MAX_MARKDOWN} caracteres.")
 
-    nome = _nome_unico(dados.pasta, nome_seguro(titulo))
-    pdf, markdown = dados.pasta / f"{nome}.pdf", dados.pasta / f"{nome}.md"
-    # O Markdown vai primeiro: é barato e guarda o trabalho da IA mesmo que o PDF falhe ou demore.
-    # Modo "x": falha em vez de sobrescrever se o arquivo aparecer entre a checagem e a gravação.
-    try:
-        with markdown.open("x", encoding="utf-8") as f:
-            f.write(conteudo_markdown)
-    except FileExistsError as exc:
-        raise ValueError("Já existe um arquivo com esse nome na pasta do teste; tente de novo.") from exc
-    evidencias = []
-    if incluir_evidencias:
-        for ev in dados.evidencias:
-            caminho = _caminho_da_evidencia(dados, ev)
-            if caminho is not None:
-                evidencias.append(EvidenciaPdf(caminho, ev.rotulo, ev.numero, ev.momento))
-    subtitulo = (f"Teste: {dados.nome_teste} · gerado em {datetime.now():%d/%m/%Y %H:%M} · {AVISO_IA}")
-    paginas = gerar_pdf_de_markdown(pdf, titulo, conteudo_markdown, subtitulo, evidencias)
+    if not dados.evidencias:
+        # a leitura de pastas antigas aceita qualquer pasta com um PDF; para GRAVAR exigimos que seja
+        # mesmo um teste deste app, senão uma base apontada para uma pasta ampla receberia arquivos
+        raise ValueError("Esta pasta não tem evidências numeradas deste app; por segurança nada é gravado nela.")
+
+    with _trava_gravacao:  # o SDK roda as ferramentas em threads: uma gravação por vez
+        if len(list(dados.pasta.glob("*.pdf"))) >= MAX_PDFS_POR_TESTE:
+            raise ValueError(f"Esta pasta já tem {MAX_PDFS_POR_TESTE} PDFs; apague os que não servem mais.")
+        nome = _nome_unico(dados.pasta, nome_seguro(titulo))
+        pdf, markdown = dados.pasta / f"{nome}.pdf", dados.pasta / f"{nome}.md"
+        # Os dois arquivos são criados em modo EXCLUSIVO ("x"): se o nome existir (inclusive como link
+        # físico para um arquivo de fora), a criação falha em vez de sobrescrever.
+        # O Markdown vai primeiro: é barato e guarda o trabalho da IA mesmo que o PDF falhe ou demore.
+        try:
+            with markdown.open("x", encoding="utf-8") as f:
+                f.write(conteudo_markdown)
+            arquivo_pdf = pdf.open("xb")
+        except FileExistsError as exc:
+            raise ValueError("Já existe um arquivo com esse nome na pasta do teste; tente de novo.") from exc
+        evidencias = []
+        if incluir_evidencias:
+            for ev in dados.evidencias:
+                caminho = _caminho_da_evidencia(dados, ev)
+                if caminho is not None:
+                    evidencias.append(EvidenciaPdf(caminho, ev.rotulo, ev.numero, ev.momento))
+        subtitulo = f"Teste: {dados.nome_teste} · gerado em {datetime.now():%d/%m/%Y %H:%M} · {AVISO_IA}"
+        try:
+            with arquivo_pdf:
+                paginas = gerar_pdf_de_markdown(arquivo_pdf, titulo, conteudo_markdown, subtitulo, evidencias)
+        except BaseException:
+            pdf.unlink(missing_ok=True)  # só o PDF que acabamos de criar; o .md fica com o trabalho da IA
+            raise
+    # `pasta` e os caminhos completos vão para a IA de propósito: o usuário precisa saber ONDE o arquivo
+    # foi parar. É a pasta que ele mesmo configurou, a mesma que a IA já está lendo.
     return {"teste": dados.pasta.name, "pdf": pdf.name, "markdown": markdown.name, "paginas": paginas,
             "evidencias_anexadas": len(evidencias), "pasta": str(dados.pasta),
             "caminho_pdf": str(pdf), "caminho_markdown": str(markdown)}

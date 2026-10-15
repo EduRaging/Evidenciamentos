@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +24,9 @@ _RESERVADOS = {"CON", "PRN", "AUX", "NUL",
 
 def nome_seguro(texto: str, limite: int = 80) -> str:
     """Transforma o nome do teste em nome de pasta/arquivo válido no Windows."""
+    # caracteres de formatação Unicode (categoria Cf, ex.: U+202E, que inverte o sentido de leitura)
+    # fariam o nome aparecer ao contrário no Explorador, disfarçando a extensão
+    texto = "".join(c for c in texto if unicodedata.category(c) != "Cf")
     nome = _CARACTERES_INVALIDOS.sub("-", texto)
     nome = re.sub(r"\s+", " ", nome).strip(" .-")[:limite].strip(" .-")
     if not nome:

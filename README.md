@@ -212,7 +212,7 @@ só conversar no chat: *"Analise o teste mais recente e gere o relatório em PDF
   comando `python` do PATH; não é assinado, então o Claude pode exibir um aviso.
 - Se não iniciar, veja `%APPDATA%\Claude\logs\mcp-server-*.log`. Em contas de equipe/empresa, o
   administrador pode restringir extensões.
-- **Ainda não foi instalado no Claude desktop de verdade.**
+- Instalada e usada no Claude desktop: leu uma pasta de evidências, listou os testes e fez a análise.
 
 #### Segurança da extensão
 
@@ -228,6 +228,24 @@ não descreve isolamento; trate-a como um programa comum). O que foi feito para 
   no PyPI é recusado: testado trocando todos os hashes, o `pip` falhou e não instalou nada.
   `pip-audit` não achou vulnerabilidades conhecidas nessas versões.
 - **Integridade**: o empacotador grava o SHA-256 em `dist\CapturadorEvidencias.mcpb.sha256`.
+- **Pasta obrigatória**: sem pasta configurada o servidor **recusa** trabalhar. Antes havia um padrão
+  que apontava para as evidências reais e foi aceito sem querer; ele foi removido. A ferramenta
+  `listar_testes` informa qual pasta está sendo lida (pergunte ao Claude: *"qual pasta você está
+  lendo?"*).
+- **Revisão independente do código** (um revisor que não participou da escrita), com correções e
+  testes de regressão em `tests\test_revisao_seguranca.py`:
+  - o Markdown do relatório não trava mais com texto adversarial (tempo linear; 0,01 s em 200 mil
+    caracteres);
+  - imagens: só PNG de verdade e com limite de pixels (um arquivo "bomba" ou de outro formato é
+    recusado);
+  - gravação do relatório com criação exclusiva e trava: duas gravações simultâneas não se
+    sobrescrevem (testado com 6 chamadas ao mesmo tempo);
+  - pasta de teste que é atalho/junção para fora da pasta de evidências é recusada;
+  - `evidencias.json` adulterado: tamanho máximo, número máximo de evidências e texto saneado
+    (caracteres de controle e de inversão de direção);
+  - o servidor roda com o Python em modo isolado (`-I -B`).
+- O empacotador confere, antes de gerar o `.mcpb`, que o servidor importa a partir do pacote (um
+  módulo esquecido na lista derrubaria a extensão), e um teste cobre essa lista.
 
 Para **atualizar as dependências** (num ambiente com `pip-tools` e `pip-audit`):
 
@@ -249,10 +267,10 @@ e depois reempacote. O que **não** some, e o que fazer:
 4. **Política da empresa**: administradores de contas de equipe/empresa podem restringir
    extensões; instalar uma extensão local numa máquina corporativa pode exigir aval da TI.
 
-**Estado**: protótipo. Testado de ponta a ponta pelo protocolo com um cliente MCP (handshake,
-ferramentas, imagem, PDF, recusa de caminhos fora da pasta), mas **ainda não** com o Claude
-Desktop/Claude Code de verdade, e **não incluído no `.exe`** (um `.exe` sem janela não tem
-stdio; empacotar pede um executável de console à parte).
+**Estado**: protótipo em uso pessoal. Testado pelo protocolo com um cliente MCP (handshake,
+ferramentas, imagem, PDF, recusa de caminhos fora da pasta) e usado no Claude desktop, mas **não
+incluído no `.exe`** (um `.exe` sem janela não tem stdio; empacotar pede um executável de console
+à parte).
 
 ## Detalhes úteis
 

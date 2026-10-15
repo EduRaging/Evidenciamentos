@@ -26,7 +26,7 @@ from capturador import __version__  # noqa: E402
 NOME_ARQUIVO = "CapturadorEvidencias.mcpb"
 # só o que o servidor usa (nada de Tk nem de captura de tela)
 MODULOS = ("__init__", "config", "metadados", "prompt_ia", "relatorio_md", "sessao", "pdf_relatorio",
-           "mcp_servidor")
+           "mcp_servidor", "imagens")
 
 PONTO_DE_ENTRADA = '''"""Ponto de entrada da extensão: inicia o servidor MCP do Capturador de Evidências."""
 import os
@@ -78,7 +78,8 @@ def manifesto() -> dict:
                 "command": "python",
                 # a pasta vai por argumento E por variável de ambiente (redundância: se o host
                 # falhar em uma das substituições, a outra ainda chega; sem nenhuma, o servidor recusa)
-                "args": ["${__dirname}/server/main.py", "--pasta", "${user_config.pasta_base}"],
+                # -I (modo isolado): ignora PYTHONPATH, o site do usuário e o diretório atual; -B: sem .pyc
+                "args": ["-I", "-B", "${__dirname}/server/main.py", "--pasta", "${user_config.pasta_base}"],
                 "env": {"CAPTURADOR_PASTA_BASE": "${user_config.pasta_base}"},
             },
         },
@@ -132,6 +133,23 @@ def montar(destino: Path) -> None:
                                            encoding="utf-8")
 
 
+def verificar_importacao(destino: Path) -> None:
+    """Importa o servidor a partir do PACOTE, como o host fará (modo isolado, só o que está nele).
+
+    Pega esquecimentos da lista MODULOS (um módulo novo que não entrou no pacote) antes de
+    entregar uma extensão que não inicia.
+    """
+    servidor = destino / "server"
+    codigo = ("import site, sys; sys.path[:0] = [sys.argv[1], sys.argv[2]]; site.addsitedir(sys.argv[2]); "
+              "import capturador.mcp_servidor")
+    resultado = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", codigo, str(servidor), str(servidor / "lib")],
+        capture_output=True, text=True)
+    if resultado.returncode != 0:
+        raise SystemExit("O servidor NÃO importa a partir do pacote (provável módulo faltando em MODULOS):\n"
+                         + resultado.stderr[-800:])
+
+
 def compactar(origem: Path, arquivo: Path) -> None:
     arquivo.parent.mkdir(exist_ok=True)
     arquivo.unlink(missing_ok=True)
@@ -147,6 +165,7 @@ def main() -> int:
         raise SystemExit("caminho de build inesperado")
     shutil.rmtree(destino, ignore_errors=True)
     montar(destino)
+    verificar_importacao(destino)
     arquivo = RAIZ / "dist" / NOME_ARQUIVO
     compactar(destino, arquivo)
     soma = hashlib.sha256(arquivo.read_bytes()).hexdigest()

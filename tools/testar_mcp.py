@@ -125,7 +125,8 @@ async def _autoteste(base: Path, nome: str, bundle: Path | None = None) -> list[
             argumentos = ["--pasta", str(base)]
         if bundle:  # como o host executa a extensão: Python do sistema, sem o mcp instalado nele
             sistema = Path(sys.base_prefix) / "python.exe"
-            return StdioServerParameters(command=str(sistema), args=[str(bundle / "server" / "main.py"),
+            # mesmos argumentos do manifesto: -I (isolado) e -B antes do script
+            return StdioServerParameters(command=str(sistema), args=["-I", "-B", str(bundle / "server" / "main.py"),
                                                                      *argumentos],
                                          cwd=str(bundle), env=ambiente)
         return StdioServerParameters(command=sys.executable, args=[str(RAIZ / "servidor_mcp.py")],
