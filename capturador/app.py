@@ -34,6 +34,8 @@ class App:
             log.warning("Ícone não encontrado; seguindo sem ele.")
         self._montar()
         self.raiz.update()
+        if not winutil.definir_icone(self.raiz, recursos.caminho("assets/icone.ico")):
+            log.warning("Não consegui definir o ícone da janela na barra de tarefas.")
         winutil.excluir_da_captura(self.raiz)  # a janela do app não sai nos prints
 
         self.var_nome.set(self.sessao.nome_teste)
@@ -344,6 +346,7 @@ def _configurar_log() -> None:
 def executar() -> None:
     _configurar_log()
     captura.ativar_dpi()
+    winutil.definir_identidade_do_app()  # antes de qualquer janela: ícone próprio na barra de tarefas
     if not winutil.instancia_unica():
         aviso = tk.Tk()
         aviso.withdraw()

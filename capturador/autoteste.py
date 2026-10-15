@@ -14,7 +14,7 @@ from pathlib import Path
 
 from PIL import Image, ImageTk
 
-from . import __version__, atalhos, captura, dialogo_prompt, metadados, recursos
+from . import __version__, atalhos, captura, dialogo_prompt, metadados, recursos, winutil
 from .pdf_relatorio import _registrar_fontes
 from .prompt_ia import Formulario, montar_prompt
 from .sessao import Sessao
@@ -37,9 +37,17 @@ def _tk_com_imagem() -> str:
         if not icone.exists():
             raise FileNotFoundError(f"ícone ausente: {icone.name}")
         raiz.iconbitmap(default=str(icone))
+        if not winutil.definir_icone(raiz, icone):
+            raise RuntimeError("não consegui declarar o ícone da janela ao Windows")
     finally:
         raiz.destroy()
-    return "Tk, ImageTk e ícone carregados"
+    return "Tk, ImageTk e ícone (janela e barra de tarefas) carregados"
+
+
+def _identidade_do_app() -> str:
+    if not winutil.definir_identidade_do_app():
+        raise RuntimeError("não consegui definir a identidade do app na barra de tarefas")
+    return "AppUserModelID definido"
 
 
 def _atalhos_globais() -> str:
@@ -92,6 +100,7 @@ def _sessao_e_pdf() -> str:
 VERIFICACOES = (
     ("captura da tela", _captura_da_tela),
     ("interface Tk e imagens", _tk_com_imagem),
+    ("identidade na barra de tarefas", _identidade_do_app),
     ("atalhos globais", _atalhos_globais),
     ("sessão, pasta e PDF", _sessao_e_pdf),
     ("prompt para IA", _prompt_ia),
