@@ -17,6 +17,16 @@ Os dois precisam de **Python 3.10+ e internet na primeira vez** (para instalar `
 `reportlab`, e `pyinstaller` no caso do `build.bat`). O `Iniciar.bat` cria o ambiente `.venv` e abre
 o app; nas próximas vezes abre direto.
 
+Na primeira execução o `Iniciar.bat` também cria, na própria pasta do projeto, o atalho
+**Capturador de Evidências** com o ícone do app, que abre o programa sem janela de console. Dali em
+diante use o atalho (pode fixá-lo na barra de tarefas). Para colocá-lo na Área de Trabalho:
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools\criar_atalho.ps1 -AreaDeTrabalho
+```
+
+O atalho aponta para esta pasta; se o projeto for movido, apague-o e rode o `Iniciar.bat` de novo.
+
 ## Como usar
 
 1. (Opcional) digite o **nome do teste** na janela. Dá para deixar em branco e informar só no final.

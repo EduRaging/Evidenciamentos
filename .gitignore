@@ -14,3 +14,6 @@ installer_output/
 
 # Dados gerados em uso
 *.log
+
+# Atalho gerado por tools\criar_atalho.ps1 (aponta para caminhos desta máquina)
+*.lnk
