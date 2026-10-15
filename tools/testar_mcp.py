@@ -115,17 +115,27 @@ async def _autoteste(base: Path, nome: str, bundle: Path | None = None) -> list[
         resultados.append(bool(condicao))
         print(("  OK     " if condicao else "  FALHA  ") + descricao)
 
-    ambiente = {**os.environ, "CAPTURADOR_PASTA_BASE": str(base)}
+    def parametros(como: str) -> StdioServerParameters:
+        """Como a pasta chega ao servidor: variável de ambiente, argumento --pasta ou NADA."""
+        ambiente = {k: v for k, v in os.environ.items() if k != "CAPTURADOR_PASTA_BASE"}
+        argumentos: list[str] = []
+        if como == "env":
+            ambiente["CAPTURADOR_PASTA_BASE"] = str(base)
+        elif como == "arg":
+            argumentos = ["--pasta", str(base)]
+        if bundle:  # como o host executa a extensão: Python do sistema, sem o mcp instalado nele
+            sistema = Path(sys.base_prefix) / "python.exe"
+            return StdioServerParameters(command=str(sistema), args=[str(bundle / "server" / "main.py"),
+                                                                     *argumentos],
+                                         cwd=str(bundle), env=ambiente)
+        return StdioServerParameters(command=sys.executable, args=[str(RAIZ / "servidor_mcp.py")],
+                                     cwd=str(RAIZ), env=ambiente)
+
     if bundle:
-        # como o host executa a extensão: Python do sistema, sem o mcp instalado nele
-        sistema = Path(sys.base_prefix) / "python.exe"
-        verificacao = subprocess.run([str(sistema), "-c", "import mcp"], capture_output=True)
+        verificacao = subprocess.run([str(Path(sys.base_prefix) / "python.exe"), "-c", "import mcp"],
+                                     capture_output=True)
         print(f"  (o Python do sistema {'NÃO tem' if verificacao.returncode else 'TEM'} o pacote mcp instalado)")
-        params = StdioServerParameters(command=str(sistema), args=[str(bundle / "server" / "main.py")],
-                                       cwd=str(bundle), env=ambiente)
-    else:
-        params = StdioServerParameters(command=sys.executable, args=[str(RAIZ / "servidor_mcp.py")],
-                                       cwd=str(RAIZ), env=ambiente)
+    params = parametros("env")
     async with stdio_client(params) as (leitura, escrita):
         async with ClientSession(leitura, escrita) as mcp:
             init = await mcp.initialize()
@@ -142,6 +152,8 @@ async def _autoteste(base: Path, nome: str, bundle: Path | None = None) -> list[
 
             r = await mcp.call_tool("listar_testes", {})
             confere("listar_testes acha o teste de exemplo", not r.is_error and nome in str(r.content))
+            confere("listar_testes informa QUAL pasta está sendo lida (pasta_base)",
+                    not r.is_error and (r.structured_content or {}).get("pasta_base") == str(base))
             r = await mcp.call_tool("ver_evidencia", {"teste": nome, "numero": 1})
             imagens = [c for c in r.content if c.type == "image"]
             confere("ver_evidencia devolve a imagem", not r.is_error and len(imagens) == 1)
@@ -163,6 +175,23 @@ async def _autoteste(base: Path, nome: str, bundle: Path | None = None) -> list[
             texto = p.messages[0].content.text
             confere("o prompt traz instruções e sugestões ISTQB/BSTQB",
                     "`ver_evidencia`" in texto and "Partição de equivalência" in texto)
+
+    # --- o incidente: sem pasta configurada o servidor NÃO pode cair numa pasta padrão
+    async with stdio_client(parametros("nenhuma")) as (leitura, escrita):
+        async with ClientSession(leitura, escrita) as mcp:
+            await mcp.initialize()
+            r = await mcp.call_tool("listar_testes", {})
+            texto = r.content[0].text if r.content else ""
+            confere("SEM pasta configurada o servidor recusa (não cai na pasta padrão do app)",
+                    r.is_error is True and "não está configurada" in texto)
+
+    if bundle:  # a extensão também aceita a pasta só por argumento (--pasta)
+        async with stdio_client(parametros("arg")) as (leitura, escrita):
+            async with ClientSession(leitura, escrita) as mcp:
+                await mcp.initialize()
+                r = await mcp.call_tool("listar_testes", {})
+                confere("a pasta chega também só por argumento (--pasta)",
+                        not r.is_error and (r.structured_content or {}).get("pasta_base") == str(base))
     return resultados
 
 

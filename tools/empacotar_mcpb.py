@@ -29,9 +29,17 @@ MODULOS = ("__init__", "config", "metadados", "prompt_ia", "relatorio_md", "sess
            "mcp_servidor")
 
 PONTO_DE_ENTRADA = '''"""Ponto de entrada da extensão: inicia o servidor MCP do Capturador de Evidências."""
+import os
 import site
 import sys
 from pathlib import Path
+
+# A pasta de evidências pode chegar por argumento (--pasta X) ou pela variável de ambiente.
+if "--pasta" in sys.argv:
+    _i = sys.argv.index("--pasta")
+    _valor = sys.argv[_i + 1] if _i + 1 < len(sys.argv) else ""
+    if _valor and not os.environ.get("CAPTURADOR_PASTA_BASE"):
+        os.environ["CAPTURADOR_PASTA_BASE"] = _valor
 
 aqui = Path(__file__).resolve().parent
 sys.path.insert(0, str(aqui))          # o pacote capturador
@@ -68,7 +76,9 @@ def manifesto() -> dict:
             "entry_point": "server/main.py",
             "mcp_config": {
                 "command": "python",
-                "args": ["${__dirname}/server/main.py"],
+                # a pasta vai por argumento E por variável de ambiente (redundância: se o host
+                # falhar em uma das substituições, a outra ainda chega; sem nenhuma, o servidor recusa)
+                "args": ["${__dirname}/server/main.py", "--pasta", "${user_config.pasta_base}"],
                 "env": {"CAPTURADOR_PASTA_BASE": "${user_config.pasta_base}"},
             },
         },
@@ -78,10 +88,12 @@ def manifesto() -> dict:
             "pasta_base": {
                 "type": "directory",
                 "title": "Pasta das evidências",
-                "description": "A mesma pasta onde o Capturador de Evidências salva os testes "
-                               "(Configurações do app). O Claude só enxerga o que estiver dentro dela.",
+                "description": "Escolha a pasta que o Claude poderá ler e onde gravará os relatórios. Ele "
+                               "só enxerga o que estiver dentro dela. Para o primeiro teste, use uma "
+                               "pasta com dados fictícios.",
                 "required": True,
-                "default": "${DOCUMENTS}/Evidencias",
+                # sem "default" de propósito: um padrão apontando para as evidências reais foi
+                # aceito sem querer; a escolha precisa ser explícita
             }
         },
         "compatibility": {

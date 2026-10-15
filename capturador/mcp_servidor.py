@@ -20,7 +20,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from PIL import Image as PILImage
 
-from . import config, metadados
+from . import metadados
 from .metadados import PastaTeste
 from .prompt_ia import SAIDAS, Formulario, montar_prompt
 from .relatorio_md import EvidenciaPdf, gerar_pdf_de_markdown
@@ -35,7 +35,9 @@ INSTRUCOES = (
     "Evidências de testes manuais capturadas pelo Capturador de Evidências. Fluxo: `listar_testes` "
     "para achar o teste; `obter_teste` para ver as evidências; `ver_evidencia` para olhar cada imagem; "
     "`salvar_relatorio_pdf` para gravar o relatório (Markdown) em PDF na pasta do teste. O prompt "
-    "`analisar_teste` já traz as instruções completas. Baseie-se só no que as imagens mostram."
+    "`analisar_teste` já traz as instruções completas. Baseie-se só no que as imagens mostram. "
+    "Sempre diga ao usuário QUAL pasta está lendo (campo `pasta_base` de `listar_testes`) e, ao salvar, "
+    "o CAMINHO COMPLETO do arquivo gerado."
 )
 
 mcp = MCPServer("capturador-evidencias", instructions=INSTRUCOES, log_level="WARNING")
@@ -57,7 +59,20 @@ def _erros_previstos(funcao):
 
 
 def _base() -> Path:
-    return Path(os.environ.get("CAPTURADOR_PASTA_BASE") or config.carregar().pasta_base)
+    """Pasta de evidências, SEMPRE explícita (variável CAPTURADOR_PASTA_BASE).
+
+    Sem ela o servidor se recusa a trabalhar. Cair numa pasta padrão do app já expôs evidências
+    REAIS quando a configuração da extensão não chegou ao processo ("falha aberta").
+    """
+    valor = (os.environ.get("CAPTURADOR_PASTA_BASE") or "").strip()
+    if not valor or valor.startswith("${"):  # ausente, vazia ou não substituída pelo host
+        raise ValueError(
+            "A pasta das evidências não está configurada nesta extensão. No Claude desktop, abra "
+            "Configurações > Extensões > capturador-evidencias, escolha a pasta e reinicie o Claude.")
+    base = Path(valor)
+    if not base.is_dir():
+        raise ValueError(f"A pasta das evidências configurada não existe: {valor}")
+    return base
 
 
 def _resolver_teste(teste: str) -> PastaTeste:
@@ -90,37 +105,40 @@ def _evidencia(dados: PastaTeste, numero: int) -> metadados.EvidenciaInfo:
     raise ValueError(f"Evidência {numero} não existe; este teste tem de 1 a {len(dados.evidencias)}.")
 
 
-def _arquivo_unico(pasta: Path, base: str, extensao: str) -> Path:
+def _nome_unico(pasta: Path, nome: str) -> str:
+    """Nome-base livre para o par .pdf/.md: nenhum dos dois pode existir (nunca sobrescreve)."""
     for n in range(1, 100):
-        candidato = pasta / f"{base}{'' if n == 1 else f' ({n})'}{extensao}"
-        if not candidato.exists():
+        candidato = nome if n == 1 else f"{nome} ({n})"
+        if not (pasta / f"{candidato}.pdf").exists() and not (pasta / f"{candidato}.md").exists():
             return candidato
-    raise OSError("Há arquivos demais com esse nome na pasta do teste.")
+    raise ValueError("Há arquivos demais com esse nome na pasta do teste; use outro título.")
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
 @_erros_previstos
-def listar_testes(limite: int = 20) -> list[dict[str, Any]]:
-    """Lista os testes finalizados mais recentes. Use o campo `teste` nas outras ferramentas."""
+def listar_testes(limite: int = 20) -> dict[str, Any]:
+    """Lista os testes finalizados mais recentes e informa QUAL pasta de evidências está sendo lida.
+
+    Use o campo `teste` de cada item nas outras ferramentas e diga ao usuário o `pasta_base`.
+    """
     base = _base()
     achados = []
-    if base.is_dir():
-        for pasta in base.iterdir():
-            if not pasta.is_dir() or pasta.name.startswith(("_", ".")):
-                continue
-            try:
-                dados = metadados.ler(pasta)
-            except ValueError:
-                continue
-            achados.append((pasta.stat().st_mtime, {
-                "teste": pasta.name,
-                "nome_teste": dados.nome_teste,
-                "evidencias": len(dados.evidencias),
-                "pdf": dados.pdf,
-                "data": datetime.fromtimestamp(pasta.stat().st_mtime).isoformat(timespec="minutes"),
-            }))
+    for pasta in base.iterdir():
+        if not pasta.is_dir() or pasta.name.startswith(("_", ".")):
+            continue
+        try:
+            dados = metadados.ler(pasta)
+        except ValueError:
+            continue
+        achados.append((pasta.stat().st_mtime, {
+            "teste": pasta.name,
+            "nome_teste": dados.nome_teste,
+            "evidencias": len(dados.evidencias),
+            "pdf": dados.pdf,
+            "data": datetime.fromtimestamp(pasta.stat().st_mtime).isoformat(timespec="minutes"),
+        }))
     achados.sort(key=lambda par: par[0], reverse=True)
-    return [item for _, item in achados[:max(1, min(limite, 100))]]
+    return {"pasta_base": str(base), "testes": [item for _, item in achados[:max(1, min(limite, 100))]]}
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
@@ -175,7 +193,15 @@ def salvar_relatorio_pdf(teste: str, titulo: str, conteudo_markdown: str,
     if not (conteudo_markdown or "").strip() or len(conteudo_markdown) > MAX_MARKDOWN:
         raise ValueError(f"O conteúdo é obrigatório e deve ter até {MAX_MARKDOWN} caracteres.")
 
-    pdf = _arquivo_unico(dados.pasta, nome_seguro(titulo), ".pdf")
+    nome = _nome_unico(dados.pasta, nome_seguro(titulo))
+    pdf, markdown = dados.pasta / f"{nome}.pdf", dados.pasta / f"{nome}.md"
+    # O Markdown vai primeiro: é barato e guarda o trabalho da IA mesmo que o PDF falhe ou demore.
+    # Modo "x": falha em vez de sobrescrever se o arquivo aparecer entre a checagem e a gravação.
+    try:
+        with markdown.open("x", encoding="utf-8") as f:
+            f.write(conteudo_markdown)
+    except FileExistsError as exc:
+        raise ValueError("Já existe um arquivo com esse nome na pasta do teste; tente de novo.") from exc
     evidencias = []
     if incluir_evidencias:
         for ev in dados.evidencias:
@@ -184,10 +210,9 @@ def salvar_relatorio_pdf(teste: str, titulo: str, conteudo_markdown: str,
                 evidencias.append(EvidenciaPdf(caminho, ev.rotulo, ev.numero, ev.momento))
     subtitulo = (f"Teste: {dados.nome_teste} · gerado em {datetime.now():%d/%m/%Y %H:%M} · {AVISO_IA}")
     paginas = gerar_pdf_de_markdown(pdf, titulo, conteudo_markdown, subtitulo, evidencias)
-    markdown = pdf.with_suffix(".md")
-    markdown.write_text(conteudo_markdown, encoding="utf-8")
     return {"teste": dados.pasta.name, "pdf": pdf.name, "markdown": markdown.name, "paginas": paginas,
-            "evidencias_anexadas": len(evidencias), "pasta": str(dados.pasta)}
+            "evidencias_anexadas": len(evidencias), "pasta": str(dados.pasta),
+            "caminho_pdf": str(pdf), "caminho_markdown": str(markdown)}
 
 
 @mcp.prompt(title="Analisar teste e gerar o relatório em PDF")

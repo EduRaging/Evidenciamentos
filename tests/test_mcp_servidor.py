@@ -46,7 +46,9 @@ class FerramentasDoServidor(unittest.TestCase):
         return str(contexto.exception)
 
     def test_listar_e_obter(self):
-        lista = self.srv.listar_testes()
+        resposta = self.srv.listar_testes()
+        self.assertEqual(resposta["pasta_base"], str(self.base))  # a IA precisa poder dizer qual pasta lê
+        lista = resposta["testes"]
         self.assertEqual([t["teste"] for t in lista], [self.nome])
         self.assertEqual(lista[0]["evidencias"], 2)
         dados = self.srv.obter_teste(self.nome)
@@ -56,7 +58,7 @@ class FerramentasDoServidor(unittest.TestCase):
     def test_listar_ignora_pastas_de_trabalho_e_estranhas(self):
         (self.base / "_cfg").mkdir()
         (self.base / "qualquer coisa").mkdir()
-        self.assertEqual(len(self.srv.listar_testes()), 1)
+        self.assertEqual(len(self.srv.listar_testes()["testes"]), 1)
 
     def test_ver_evidencia_reduz_imagens_grandes_e_preserva_pequenas(self):
         grande = Image.open(io.BytesIO(base64.b64decode(
@@ -86,6 +88,50 @@ class FerramentasDoServidor(unittest.TestCase):
         self.assertEqual(a["evidencias_anexadas"], 2)
         self.assertEqual(b["evidencias_anexadas"], 0)
         self.assertEqual((self.pasta / a["markdown"]).read_text(encoding="utf-8"), "# Oi\n\ntexto")
+        # a IA informa onde o arquivo foi parar (o caminho vem resolvido, sem o formato curto 8.3)
+        self.assertTrue(Path(a["caminho_pdf"]).samefile(self.pasta / a["pdf"]))
+        self.assertTrue(Path(a["caminho_markdown"]).samefile(self.pasta / a["markdown"]))
+
+    def test_um_md_ja_existente_tambem_desvia_o_nome_do_par(self):
+        (self.pasta / "Relatório.md").write_text("antigo", encoding="utf-8")
+        resultado = self.srv.salvar_relatorio_pdf(self.nome, "Relatório", "# novo")
+        self.assertEqual(resultado["pdf"], "Relatório (2).pdf")
+        self.assertEqual((self.pasta / "Relatório.md").read_text(encoding="utf-8"), "antigo")  # intacto
+
+    def test_markdown_e_gravado_antes_do_pdf(self):
+        from unittest import mock
+
+        with mock.patch.object(self.srv, "gerar_pdf_de_markdown", side_effect=RuntimeError("falha simulada")):
+            with self.assertRaises(Exception):
+                self.srv.salvar_relatorio_pdf(self.nome, "Parcial", "# conteudo da IA")
+        self.assertEqual((self.pasta / "Parcial.md").read_text(encoding="utf-8"), "# conteudo da IA")
+        self.assertFalse((self.pasta / "Parcial.pdf").exists())
+
+    def test_sem_pasta_configurada_o_servidor_recusa_em_todas_as_ferramentas(self):
+        """O incidente: sem a variável, o servidor caía na pasta REAL do app. Agora tem que recusar."""
+        casos = {
+            "ausente": None,
+            "vazia": "",
+            "so espacos": "   ",
+            "nao substituida pelo host": "${user_config.pasta_base}",
+            "inexistente": str(self.base / "nao_existe"),
+        }
+        for descricao, valor in casos.items():
+            with self.subTest(pasta=descricao):
+                if valor is None:
+                    os.environ.pop("CAPTURADOR_PASTA_BASE", None)
+                else:
+                    os.environ["CAPTURADOR_PASTA_BASE"] = valor
+                self._erro(self.srv.listar_testes)
+                self._erro(self.srv.obter_teste, self.nome)
+                self._erro(self.srv.ver_evidencia, self.nome, 1)
+                self._erro(self.srv.salvar_relatorio_pdf, self.nome, "T", "texto")
+
+    def test_mensagem_de_pasta_nao_configurada_diz_o_que_fazer(self):
+        os.environ.pop("CAPTURADOR_PASTA_BASE", None)
+        mensagem = self._erro(self.srv.listar_testes)
+        self.assertIn("não está configurada", mensagem)
+        self.assertIn("Extensões", mensagem)
 
     def test_salvar_valida_tamanhos(self):
         self._erro(self.srv.salvar_relatorio_pdf, self.nome, "", "x")

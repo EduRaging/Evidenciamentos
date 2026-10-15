@@ -159,8 +159,12 @@ claude mcp add --transport stdio evidenciador -- "<pasta do projeto>\.venv\Scrip
 ```
 
 Depois, peça algo como: *"Analise o teste mais recente e gere o relatório em PDF"*, ou use o prompt
-`analisar_teste`. Por padrão o servidor lê a pasta de evidências definida nas Configurações do app
-(`CAPTURADOR_PASTA_BASE` a substitui).
+`analisar_teste`. A pasta de evidências é **obrigatória e explícita**: vem da variável
+`CAPTURADOR_PASTA_BASE` (ou, na extensão, do argumento `--pasta`). Sem ela o servidor **se recusa a
+trabalhar** em vez de cair numa pasta padrão do app: numa versão anterior esse "plano B" fez a
+extensão ler as evidências **reais** quando a configuração da extensão não chegou ao processo. Agora
+`listar_testes` informa qual pasta está sendo lida (`pasta_base`) e `salvar_relatorio_pdf` devolve o
+caminho completo do arquivo gerado.
 
 ### Extensão para o Claude desktop (`.mcpb`), uso pessoal
 

@@ -99,9 +99,10 @@ def _lista_evidencias(teste: PastaTeste) -> str:
 
 def _anexo(teste: PastaTeste, via_mcp: bool = False) -> str:
     if via_mcp:
-        return (f'As evidências do teste "{teste.pasta.name}" estão ao seu alcance por ferramentas: use '
-                f"`ver_evidencia` para olhar cada uma, de 1 a {len(teste.evidencias)}, e olhe TODAS antes de "
-                'escrever qualquer coisa. A "Evidência N" é o item N da lista abaixo.')
+        return (f'As evidências do teste "{teste.pasta.name}" estão ao seu alcance por ferramentas. Antes de '
+                "analisar, diga ao usuário qual pasta está sendo lida (campo `pasta_base` de `listar_testes`). "
+                f"Use `ver_evidencia` para olhar cada evidência, de 1 a {len(teste.evidencias)}, e olhe TODAS "
+                'antes de escrever qualquer coisa. A "Evidência N" é o item N da lista abaixo.')
     if teste.pdf:
         return (f'Anexei o arquivo "{teste.pdf}": a primeira página é a capa e cada página seguinte '
                 "é uma evidência, na mesma ordem da lista abaixo (a \"Evidência N\" do PDF é o item N). "
@@ -132,8 +133,8 @@ def _secao_entrega_mcp(teste: PastaTeste, saida: str) -> str:
         f'teste="{teste.pasta.name}", um título (sugestão: "{titulo} - {teste.nome_teste}") e o conteúdo '
         "completo em Markdown (títulos, listas e tabelas são suportados), com incluir_evidencias=true para "
         "anexar as imagens ao final. O PDF é gerado no computador do testador, na pasta do teste.\n"
-        "- Depois de salvar, responda só com o nome do arquivo gerado e um resumo de 3 a 5 linhas. "
-        "Não cole o relatório inteiro no chat."
+        "- Depois de salvar, responda com o CAMINHO COMPLETO do arquivo gerado (campo `caminho_pdf` do "
+        "resultado) e um resumo de 3 a 5 linhas. Não cole o relatório inteiro no chat."
     )
 
 
