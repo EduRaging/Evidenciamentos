@@ -72,6 +72,7 @@ class Formulario:
     entregar_pdf: bool = True  # pede à IA o resultado já em arquivo PDF
     via_mcp: bool = False  # a IA usa as ferramentas do servidor MCP em vez de anexos
     sugerir_casos: bool = True  # pede casos adicionais com técnicas ISTQB/BSTQB, quando houver base
+    automacao: bool = False  # pede a avaliação do que é automatizável e o código Playwright (Python)
 
 
 def _ou_nao_informado(texto: str) -> str:
@@ -139,7 +140,37 @@ def _secao_entrega_mcp(teste: PastaTeste, saida: str) -> str:
     )
 
 
-def _o_que_produzir(saida: str, sugerir_casos: bool) -> str:
+_SECAO_AUTOMACAO = """\
+### Avaliação de automação e código Playwright (Python)
+Para CADA caso de teste (os executados e os sugeridos), avalie se é plausível automatizá-lo com o Playwright (Python, pytest) e deixe isso claro numa tabela Markdown com as colunas: ID | Caso | Automatizável (Sim, Parcial ou Não) | Por quê | O que falta para automatizar (URL, login, dados, ambiente) | Estabilidade esperada (Alta, Média ou Baixa).
+- Na dúvida, escolha "Parcial" e diga o que falta. Use "Não" só com motivo concreto: julgamento visual ou de layout, CAPTCHA ou código recebido por SMS/e-mail, serviço de terceiros fora do controle do testador, impressão ou arquivo no computador, resultado esperado ambíguo, teste exploratório.
+- Para os casos sugeridos (não executados), o resultado esperado é hipótese: marque-o "(a confirmar)" na avaliação e no código.
+- Depois da tabela, some quantos casos são Sim, Parcial e Não.
+- Se as telas não parecem ser de uma aplicação web (programa de desktop, por exemplo), diga que o Playwright não se aplica e que a automação pediria outra ferramenta; nesse caso não gere código.
+Em seguida, gere o código dos casos "Sim" e "Parcial", em blocos de código Python separados por arquivo (`conftest.py` e {arquivos}), seguindo estas regras:
+- pytest com o plugin pytest-playwright (fixture `page`) e `expect`; sem esperas fixas (nada de `sleep` nem `wait_for_timeout`): use as esperas automáticas.
+- Localize os elementos pelo que o usuário enxerga, com `get_by_role`, `get_by_label` e `get_by_text`; evite XPath e CSS por posição. Você só viu imagens: marque com o comentário `# NÃO VERIFICADO` todo seletor ou texto que não pôde confirmar, e diga no fim que eles devem ser conferidos com `playwright codegen`.
+- Casos de valor limite e partição de equivalência viram um teste parametrizado (`@pytest.mark.parametrize`) com a tabela de entradas e resultados esperados.
+- A docstring de cada teste traz o ID do caso e a(s) evidência(s) em que ele se baseia (ex.: CT-02, Evidência 3).
+- URL, usuário e senha NUNCA vão no código: leia de variáveis de ambiente (`BASE_URL`, `TESTE_USUARIO`, `TESTE_SENHA`) no `conftest.py`. Os testes devem rodar só em ambiente de homologação.
+- Use dados de exemplo fictícios: não copie para o código nomes, CPF/CNPJ, e-mails nem valores reais que apareçam nas imagens.
+- Testes que gravam, alteram ou apagam dados levam o marcador `@pytest.mark.altera_dados` e um comentário avisando.
+- Termine com "Como rodar" (3 a 5 linhas: instalar `pytest-playwright`, `playwright install`, definir as variáveis, `pytest`) e a lista do que o testador precisa fornecer.
+{entrega}"""
+
+
+def _secao_automacao(entregar_pdf: bool, varios: bool) -> str:
+    arquivos = ("um `test_<nome do teste>.py` por teste, com um único `conftest.py` comum" if varios
+                else "`test_<assunto>.py`")
+    entrega = (
+        "A tabela de avaliação (com a soma) entra no relatório"
+        + (" de cada teste" if varios else "")
+        + " em PDF; o código NÃO vai no PDF: entregue-o no chat, em blocos separados por arquivo."
+        if entregar_pdf else "Entregue a tabela e o código aqui no chat.")
+    return _SECAO_AUTOMACAO.format(arquivos=arquivos, entrega=entrega)
+
+
+def _o_que_produzir(saida: str, sugerir_casos: bool, automacao: str = "") -> str:
     secoes = []
     if saida in ("casos", "ambos"):
         secoes.append(_SECAO_CASOS)
@@ -147,20 +178,25 @@ def _o_que_produzir(saida: str, sugerir_casos: bool) -> str:
         secoes.append(_SECAO_RELATORIO)
     if sugerir_casos:
         secoes.append(_SECAO_SUGESTOES)
+    if automacao:
+        secoes.append(automacao)
     if saida == "ambos":
         secoes.append("Faça primeiro os casos de teste e depois o relatório, reaproveitando os mesmos IDs."
                       + (" No relatório, trate os casos sugeridos (CS-xx) apenas como recomendação de testes "
-                         "adicionais, nunca como executados." if sugerir_casos else ""))
+                         "adicionais, nunca como executados." if sugerir_casos else "")
+                      + (" Deixe a avaliação de automação e o código por último." if automacao else ""))
     return "\n\n".join(secoes)
 
 
 def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
     saida = form.saida if form.saida in SAIDAS else "ambos"
-    tarefa = _TAREFAS[saida] + (" e entregar o resultado em um arquivo PDF" if form.entregar_pdf else "")
+    tarefa = (_TAREFAS[saida] + (" e entregar o resultado em um arquivo PDF" if form.entregar_pdf else "")
+              + (" e avaliar o que é automatizável, gerando a automação em Playwright" if form.automacao else ""))
 
     criterios = form.criterios.strip()
     if not criterios:
         criterios = f"{NAO_INFORMADO} (deduza pelo objetivo e marque como \"deduzido\")"
+    automacao = _secao_automacao(form.entregar_pdf, varios=False) if form.automacao else ""
 
     partes = [
         "Você é um analista de qualidade (QA) sênior. Vou te enviar as evidências de um teste "
@@ -176,7 +212,7 @@ def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
         f"## Evidências {'disponíveis' if form.via_mcp else 'anexadas'} ({len(teste.evidencias)})\n"
         f"{_anexo(teste, form.via_mcp)}\n\n{_lista_evidencias(teste)}",
         f"## Regras\n{_REGRAS}",
-        "## O que produzir\n" + _o_que_produzir(saida, form.sugerir_casos),
+        "## O que produzir\n" + _o_que_produzir(saida, form.sugerir_casos, automacao),
     ]
     if form.entregar_pdf:
         partes.append(_secao_entrega_mcp(teste, saida) if form.via_mcp
@@ -228,11 +264,13 @@ def montar_prompt_varios(testes: list[PastaTeste], form: Formulario) -> str:
     if len(testes) > MAX_TESTES:
         raise ValueError(f"Selecione no máximo {MAX_TESTES} testes por vez (foram {len(testes)}).")
     saida = form.saida if form.saida in SAIDAS else "ambos"
-    tarefa = _TAREFAS_VARIOS[saida] + (
-        " e salvar cada resultado em PDF na pasta do respectivo teste" if form.entregar_pdf else "")
+    tarefa = (_TAREFAS_VARIOS[saida]
+              + (" e salvar cada resultado em PDF na pasta do respectivo teste" if form.entregar_pdf else "")
+              + (" e avaliar o que é automatizável, gerando a automação em Playwright" if form.automacao else ""))
     criterios = form.criterios.strip()
     if not criterios:
         criterios = f"{NAO_INFORMADO} (deduza pelo nome do teste e pelas evidências e marque como \"deduzido\")"
+    automacao = _secao_automacao(form.entregar_pdf, varios=True) if form.automacao else ""
     total = sum(len(t.evidencias) for t in testes)
     partes = [
         f"Você é um analista de qualidade (QA) sênior. Vou te pedir a análise de {len(testes)} "
@@ -251,7 +289,7 @@ def montar_prompt_varios(testes: list[PastaTeste], form: Formulario) -> str:
         "antes de escrever qualquer coisa sobre ele. A \"Evidência N\" é o item N da lista devolvida por "
         "`obter_teste`. Processe UM teste por vez.",
         f"## Regras\n{_REGRAS_VARIOS}",
-        "## O que produzir (para cada teste)\n" + _o_que_produzir(saida, form.sugerir_casos),
+        "## O que produzir (para cada teste)\n" + _o_que_produzir(saida, form.sugerir_casos, automacao),
     ]
     if form.entregar_pdf:
         partes.append(_entrega_varios(saida))

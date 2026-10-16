@@ -68,7 +68,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
     janela = tk.Toplevel(pai)
     janela.title("Preparar prompt para IA" + (f" — {len(testes)} testes" if multiplo else ""))
     janela.geometry("780x760")
-    janela.minsize(700, 700)
+    janela.minsize(700, 720)
     janela.transient(pai)
 
     quadro = ttk.Frame(janela, padding=14)
@@ -80,6 +80,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
     var_saida = tk.StringVar(value="ambos")
     var_pdf = tk.BooleanVar(value=True)
     var_sugerir = tk.BooleanVar(value=True)
+    var_automacao = tk.BooleanVar(value=False)
     var_extensao = tk.BooleanVar(value=True)
     var_aviso_extensao = tk.StringVar()
     var_status = tk.StringVar()
@@ -118,6 +119,8 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
         side="left", padx=(10, 0))
     ttk.Checkbutton(opcoes, text="Sugerir casos de teste adicionais (técnicas ISTQB/BSTQB)",
                     variable=var_sugerir).pack(anchor="w", pady=(4, 0))
+    ttk.Checkbutton(opcoes, text="Avaliar o que é automatizável e gerar código Playwright (Python)",
+                    variable=var_automacao).pack(anchor="w", pady=(4, 0))
     chk_extensao = ttk.Checkbutton(
         opcoes, variable=var_extensao, text="Claude com a extensão instalada (ele lê as evidências direto da pasta)"
         + (" — necessário com vários testes" if multiplo else ""))
@@ -167,6 +170,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
             saida=var_saida.get(),
             entregar_pdf=var_pdf.get(),
             sugerir_casos=var_sugerir.get(),
+            automacao=var_automacao.get(),
             via_mcp=var_extensao.get(),
         )
 
@@ -278,6 +282,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
     var_saida.trace_add("write", agendar)
     var_pdf.trace_add("write", agendar)
     var_sugerir.trace_add("write", agendar)
+    var_automacao.trace_add("write", agendar)
     var_extensao.trace_add("write", agendar)
     var_extensao.trace_add("write", atualizar_aviso_extensao)
     for campo in campos.values():

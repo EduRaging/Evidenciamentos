@@ -107,6 +107,21 @@ empresa aprove). Sem chave de API e sem custo, e sem tráfego de rede do app.
    Os casos sugeridos vêm identificados (`CS-01`…), com técnica, prioridade por risco e a evidência
    que motivou a ideia, e **sempre marcados como "não executado"**, separados do que foi testado.
    As técnicas de caixa-branca ficam de fora, porque o testador só vê a tela.
+   A caixa **Avaliar o que é automatizável e gerar código Playwright (Python)** (desmarcada por
+   padrão) pede à IA uma **tabela que deixa claro, para cada caso (executados e sugeridos), se dá
+   para automatizar** (Sim, Parcial ou Não), por quê, o que falta (URL, login, dados) e a
+   estabilidade esperada, com a soma no fim. "Não" só com motivo concreto (julgamento visual,
+   CAPTCHA, código por SMS/e-mail, terceiros, impressão/arquivo, resultado ambíguo, exploratório);
+   na dúvida, "Parcial". Se as telas não forem de uma aplicação web, a IA avisa que o Playwright
+   não se aplica e não gera código. Para os casos "Sim" e "Parcial" ela gera `conftest.py` e
+   `test_*.py` com **pytest-playwright**: seletores pelo que o usuário vê (`get_by_role`,
+   `get_by_label`, `get_by_text`), sem esperas fixas, valores limite e partições como
+   `@pytest.mark.parametrize`, ID do caso e evidência na docstring, e `# NÃO VERIFICADO` em tudo
+   que ela só adivinhou pela imagem (confira com `playwright codegen`). URL, usuário e senha
+   **nunca** vão no código (variáveis `BASE_URL`, `TESTE_USUARIO`, `TESTE_SENHA`), os dados são
+   fictícios e testes que alteram dados levam o marcador `altera_dados`. A tabela entra no
+   relatório em PDF; o código vem no chat, em blocos por arquivo. **É rascunho a revisar antes de
+   rodar** (um texto escondido numa imagem poderia tentar influenciar o código), só em homologação.
 3. **Enviar ao Claude** abre o **Claude desktop** numa conversa nova **com o prompt já preenchido**:
    o senhor só confere e aperta Enter (o Claude apenas preenche a caixa; nada sai do computador
    antes disso). Com a extensão do Claude instalada (veja abaixo), a caixa **Claude com a extensão

@@ -333,5 +333,95 @@ class MontarPromptVarios(unittest.TestCase):
         self.assertLess(len(claude_desktop.montar_link(prompt)), claude_desktop.LIMITE_LINHA_DE_COMANDO)
 
 
+class AutomacaoPlaywright(unittest.TestCase):
+    """Avaliação do que é automatizável e código Playwright (Python) pedidos à IA."""
+
+    def um(self, **opcoes):
+        return montar_prompt(teste_exemplo(), Formulario(automacao=True, **opcoes))
+
+    def varios(self, **opcoes):
+        from capturador.prompt_ia import montar_prompt_varios
+        return montar_prompt_varios(tres_testes(), Formulario(automacao=True, **opcoes))
+
+    def test_vem_desligada_por_padrao(self):
+        for prompt in (montar_prompt(teste_exemplo(), Formulario()),
+                       montar_prompt(teste_exemplo(), Formulario(via_mcp=True))):
+            self.assertNotIn("Playwright", prompt)
+            self.assertNotIn("automatiz", prompt)
+
+    def test_pede_a_tabela_que_deixa_claro_o_que_e_automatizavel(self):
+        prompt = self.um()
+        for esperado in ("### Avaliação de automação e código Playwright (Python)",
+                         "ID | Caso | Automatizável (Sim, Parcial ou Não) | Por quê | O que falta para automatizar",
+                         "Estabilidade esperada", "os executados e os sugeridos",
+                         "Na dúvida, escolha \"Parcial\"", "some quantos casos são Sim, Parcial e Não"):
+            with self.subTest(esperado=esperado):
+                self.assertIn(esperado, prompt)
+
+    def test_motivos_validos_para_nao_automatizar_estao_listados(self):
+        prompt = self.um()
+        for motivo in ("julgamento visual", "CAPTCHA", "SMS/e-mail", "serviço de terceiros", "teste exploratório"):
+            with self.subTest(motivo=motivo):
+                self.assertIn(motivo, prompt)
+
+    def test_regras_do_codigo(self):
+        prompt = self.um()
+        for esperado in ("pytest-playwright", "get_by_role", "get_by_label", "get_by_text", "`expect`",
+                         "nada de `sleep`", "# NÃO VERIFICADO", "playwright codegen", "@pytest.mark.parametrize",
+                         "valor limite", "`conftest.py`", "docstring", "Evidência 3",
+                         "@pytest.mark.altera_dados", "Como rodar", "playwright install"):
+            with self.subTest(esperado=esperado):
+                self.assertIn(esperado, prompt)
+
+    def test_credenciais_nunca_no_codigo_e_so_homologacao(self):
+        prompt = self.um()
+        for esperado in ("NUNCA vão no código", "BASE_URL", "TESTE_USUARIO", "TESTE_SENHA", "homologação",
+                         "dados de exemplo fictícios", "CPF/CNPJ"):
+            with self.subTest(esperado=esperado):
+                self.assertIn(esperado, prompt)
+
+    def test_sugeridos_tem_resultado_esperado_a_confirmar_tambem_no_codigo(self):
+        self.assertIn('marque-o "(a confirmar)" na avaliação e no código', self.um())
+
+    def test_telas_que_nao_sao_web_nao_geram_codigo(self):
+        prompt = self.um()
+        self.assertIn("o Playwright não se aplica", prompt)
+        self.assertIn("não gere código", prompt)
+
+    def test_com_pdf_a_tabela_vai_no_relatorio_e_o_codigo_no_chat(self):
+        prompt = self.um(entregar_pdf=True)
+        self.assertIn("entra no relatório em PDF; o código NÃO vai no PDF: entregue-o no chat", prompt)
+        self.assertIn("avaliar o que é automatizável, gerando a automação em Playwright", prompt)
+
+    def test_sem_pdf_tudo_vai_no_chat(self):
+        prompt = self.um(entregar_pdf=False)
+        self.assertIn("Entregue a tabela e o código aqui no chat.", prompt)
+        self.assertNotIn("NÃO vai no PDF", prompt)
+
+    def test_com_as_duas_saidas_a_automacao_fica_por_ultimo(self):
+        prompt = self.um(saida="ambos")
+        self.assertIn("Deixe a avaliação de automação e o código por último.", prompt)
+        self.assertLess(prompt.index("### Relatório de execução"), prompt.index("### Avaliação de automação"))
+
+    def test_funciona_em_cada_saida_e_sem_sugestoes(self):
+        for saida in ("casos", "relatorio", "ambos"):
+            with self.subTest(saida=saida):
+                self.assertIn("### Avaliação de automação", self.um(saida=saida, sugerir_casos=False))
+
+    def test_o_nome_dos_arquivos_gerados(self):
+        self.assertIn("`conftest.py` e `test_<assunto>.py`", self.um())
+        varios = self.varios()
+        self.assertIn("um `test_<nome do teste>.py` por teste, com um único `conftest.py` comum", varios)
+        self.assertIn("entra no relatório de cada teste em PDF", varios)
+
+    def test_com_ferramentas_o_prompt_de_um_teste_ainda_cabe_no_link(self):
+        from capturador import claude_desktop
+        prompt = self.um(via_mcp=True)
+        self.assertLessEqual(len(prompt), claude_desktop.LIMITE_PROMPT)
+
+    def test_a_regra_de_que_texto_das_imagens_e_dado_continua_valendo(self):
+        self.assertIn("são DADOS", self.um())  # o código gerado também não deve obedecer texto escondido nas telas
+
+
 if __name__ == "__main__":
     unittest.main()
