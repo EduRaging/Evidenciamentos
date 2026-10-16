@@ -114,5 +114,59 @@ class AreaDeTransferencia(unittest.TestCase):
         self.assertEqual(dados[20:].decode("utf-16-le"), caminho + "\0\0")
 
 
+class AgruparPorTeste(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+        agora = time.time()
+        criar(self.base / "2026-10-09_1400 - Login", "Evidencias - Login.pdf", mtime=agora - 500)
+        criar(self.base / "2026-10-09_1400 - Login", "Relatório de testes - Login.pdf", mtime=agora - 100)
+        criar(self.base / "2026-10-09_1400 - Login", "Relatório de testes - Login (2).pdf", mtime=agora - 50)
+        criar(self.base / "2026-10-08_0900 - Cadastro", "Evidencias - Cadastro.pdf", mtime=agora - 900)
+        criar(self.base / "2026-10-10_0800 - So relatorio", "Relatório - X.pdf", mtime=agora - 10)
+
+    def agrupados(self):
+        return registro_pdfs.agrupar_por_teste(listar_pdfs(self.base))
+
+    def test_um_item_por_teste_do_mais_recente_para_o_mais_antigo(self):
+        self.assertEqual([t.teste for t in self.agrupados()], ["So relatorio", "Login", "Cadastro"])
+
+    def test_separa_evidencias_e_relatorios_com_o_relatorio_mais_novo_primeiro(self):
+        login = next(t for t in self.agrupados() if t.teste == "Login")
+        self.assertEqual(login.evidencias.caminho.name, "Evidencias - Login.pdf")
+        self.assertEqual([r.caminho.name for r in login.relatorios],
+                         ["Relatório de testes - Login (2).pdf", "Relatório de testes - Login.pdf"])
+        self.assertEqual(len(login.pdfs), 3)
+
+    def test_pdf_principal_e_o_relatorio_mais_recente_ou_senao_o_de_evidencias(self):
+        por_nome = {t.teste: t for t in self.agrupados()}
+        self.assertEqual(por_nome["Login"].principal.caminho.name, "Relatório de testes - Login (2).pdf")
+        self.assertEqual(por_nome["Cadastro"].principal.caminho.name, "Evidencias - Cadastro.pdf")
+        self.assertEqual(por_nome["Cadastro"].relatorios, ())
+        self.assertIsNone(por_nome["So relatorio"].evidencias)
+
+    def test_a_ordem_vem_do_dia_do_teste_e_nao_do_relatorio_gerado_depois(self):
+        # o relatório do Login é mais novo que o PDF do teste de 10/10, mas o teste de 10/10 ainda vem primeiro
+        self.assertEqual(self.agrupados()[0].momento.day, 10)
+
+    def test_pasta_sem_prefixo_de_data_usa_o_pdf_mais_antigo(self):
+        criar(self.base / "Pasta sem data", "Evidencias - Sem data.pdf", mtime=time.time() - 5000)
+        sem_data = next(t for t in self.agrupados() if t.pasta_nome == "Pasta sem data")
+        self.assertAlmostEqual(sem_data.momento.timestamp(), time.time() - 5000, delta=5)
+
+    def test_lista_vazia(self):
+        self.assertEqual(registro_pdfs.agrupar_por_teste([]), [])
+
+    def test_filtro_por_teste_combina_palavras_ignora_acento_e_olha_os_arquivos(self):
+        testes = self.agrupados()
+        achar = lambda texto: [t.teste for t in registro_pdfs.filtrar_testes(testes, texto)]  # noqa: E731
+        self.assertEqual(achar(""), ["So relatorio", "Login", "Cadastro"])
+        self.assertEqual(achar("login"), ["Login"])
+        self.assertEqual(achar("relatorio login"), ["Login"])  # a palavra do arquivo "Relatório de testes - Login"
+        self.assertEqual(achar("cadastro evidencias"), ["Cadastro"])
+        self.assertEqual(achar("zzz"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

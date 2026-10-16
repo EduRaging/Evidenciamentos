@@ -9,7 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from . import atalhos, captura, config, recursos, winutil
+from . import atalhos, captura, config, estilo, miniaturas, recursos, winutil
 from .aviso import mostrar_aviso
 from .dialogo_prompt import abrir_dialogo_prompt, ler_testes
 from .dialogos import abrir_configuracoes
@@ -49,64 +49,71 @@ class App:
     # --- interface ----------------------------------------------------
     def _montar(self) -> None:
         r = self.raiz
+        estilo.aplicar(r)
         r.title("Capturador de Evidências")
-        r.geometry("560x640")
-        r.minsize(500, 560)
+        r.geometry("540x680")
+        r.minsize(500, 600)
         r.protocol("WM_DELETE_WINDOW", self._ao_fechar)
 
         self.abas = ttk.Notebook(r)
         self.abas.pack(fill="both", expand=True)
-        quadro = ttk.Frame(self.abas, padding=14)
-        self.abas.add(quadro, text="Capturar")
+        quadro = ttk.Frame(self.abas, padding=(18, 16, 18, 12))
+        self.abas.add(quadro, text="  Capturar  ")
         self.painel_pdfs = PainelPdfs(self.abas, lambda: self.cfg.pasta_base, self._analisar_varios)
-        self.abas.add(self.painel_pdfs, text="PDFs gerados")
+        self.abas.add(self.painel_pdfs, text="  Meus testes  ")
         self.abas.bind("<<NotebookTabChanged>>", lambda _e: self.painel_pdfs.atualizar())
 
-        ttk.Label(quadro, text="Nome do teste").pack(anchor="w")
+        # --- nome do teste e os dois botões de captura
+        ttk.Label(quadro, text="Nome do teste", style="Suave.TLabel").pack(anchor="w")
         self.var_nome = tk.StringVar()
-        ttk.Entry(quadro, textvariable=self.var_nome).pack(fill="x", pady=(2, 12))
+        ttk.Entry(quadro, textvariable=self.var_nome, font=(estilo.FAMILIA, 11)).pack(fill="x", pady=(2, 14), ipady=3)
 
         botoes = ttk.Frame(quadro)
         botoes.pack(fill="x")
         botoes.columnconfigure((0, 1), weight=1, uniform="capturar")
         self.btn_tela = ttk.Button(botoes, command=self.capturar_tela)
-        self.btn_tela.grid(row=0, column=0, sticky="ew", padx=(0, 4), ipady=6)
+        self.btn_tela.grid(row=0, column=0, sticky="ew", padx=(0, 5), ipady=7)
         self.btn_recorte = ttk.Button(botoes, command=self.capturar_recorte)
-        self.btn_recorte.grid(row=0, column=1, sticky="ew", padx=(4, 0), ipady=6)
+        self.btn_recorte.grid(row=0, column=1, sticky="ew", padx=(5, 0), ipady=7)
 
-        ttk.Label(quadro, text="Evidências desta sessão").pack(anchor="w", pady=(14, 2))
-        lista = ttk.Frame(quadro)
-        lista.pack(fill="both", expand=True)
-        self.lista = ttk.Treeview(lista, columns=("n", "tipo", "hora"), show="headings",
-                                  selectmode="browse", height=8)
-        for coluna, titulo, largura in (("n", "#", 40), ("tipo", "Tipo", 150), ("hora", "Hora", 120)):
-            self.lista.heading(coluna, text=titulo)
-            self.lista.column(coluna, width=largura, anchor="w" if coluna != "n" else "center")
-        barra = ttk.Scrollbar(lista, orient="vertical", command=self.lista.yview)
+        # --- evidências da sessão: miniaturas (ou um convite, enquanto não há nenhuma)
+        self.var_contador = tk.StringVar()
+        ttk.Label(quadro, textvariable=self.var_contador, style="Secao.TLabel").pack(anchor="w", pady=(18, 4))
+        self._area_lista = ttk.Frame(quadro)
+        self._moldura_lista = ttk.Frame(self._area_lista)
+        self.lista = ttk.Treeview(self._moldura_lista, show="tree", selectmode="browse", style="Evid.Treeview")
+        self.lista.column("#0", width=300, stretch=True)
+        barra = ttk.Scrollbar(self._moldura_lista, orient="vertical", command=self.lista.yview)
         self.lista.configure(yscrollcommand=barra.set)
         self.lista.pack(side="left", fill="both", expand=True)
         barra.pack(side="right", fill="y")
+        self._vazio = ttk.Label(self._area_lista, style="Suave.TLabel", justify="center", anchor="center",
+                                relief="groove", padding=20, wraplength=400)
+        self._dica = ttk.Label(quadro, text="Duplo clique abre a imagem · Delete remove a selecionada",
+                               style="Suave.TLabel")
+        self._miniaturas: list = []  # referências: o Tk descarta a imagem se ninguém a segurar
         self.lista.bind("<Double-1>", lambda _e: self._abrir_selecionada())
+        self.lista.bind("<Return>", lambda _e: self._abrir_selecionada())
+        self.lista.bind("<Delete>", lambda _e: self._remover_selecionada())
+        self.lista.bind("<Button-3>", self._menu_da_evidencia)
+        self.menu_evidencia = tk.Menu(self.raiz, tearoff=False)
+        self.menu_evidencia.add_command(label="Abrir imagem", command=self._abrir_selecionada)
+        self.menu_evidencia.add_command(label="Remover do teste", command=self._remover_selecionada)
 
-        acoes = ttk.Frame(quadro)
-        acoes.pack(fill="x", pady=(6, 0))
-        ttk.Button(acoes, text="Abrir imagem", command=self._abrir_selecionada).pack(side="left")
-        ttk.Button(acoes, text="Remover selecionada", command=self._remover_selecionada).pack(
-            side="left", padx=6)
-        ttk.Button(acoes, text="Preparar prompt para IA…", command=self._preparar_prompt).pack(
-            side="right")
-
-        ttk.Separator(quadro).pack(fill="x", pady=12)
+        # --- ação principal e o que é secundário
         rodape = ttk.Frame(quadro)
-        rodape.pack(fill="x")
-        ttk.Button(rodape, text="Finalizar e gerar PDF", command=self.finalizar).pack(
-            side="left", ipady=4, ipadx=6)
-        ttk.Button(rodape, text="Descartar tudo", command=self._descartar).pack(side="left", padx=6)
-        ttk.Button(rodape, text="Configurações…", command=self._configuracoes).pack(side="right")
+        rodape.pack(fill="x", side="bottom", pady=(10, 0))
+        self.btn_finalizar = estilo.botao_primario(rodape, "Finalizar teste", self.finalizar)
+        self.btn_finalizar.pack(side="left")
+        ttk.Button(rodape, text="Descartar", style="Link.Toolbutton", command=self._descartar).pack(side="left", padx=10)
+        ttk.Button(rodape, text="Configurações", style="Link.Toolbutton", command=self._configuracoes).pack(side="right")
 
         self.var_status = tk.StringVar()
-        ttk.Label(quadro, textvariable=self.var_status, foreground="#555", wraplength=460).pack(
-            anchor="w", pady=(10, 0))
+        ttk.Label(quadro, textvariable=self.var_status, style="Suave.TLabel", wraplength=480).pack(
+            anchor="w", side="bottom", pady=(8, 0))
+        self._dica.pack(anchor="w", side="bottom", pady=(6, 0))
+        # a lista é empacotada por último: o que está embaixo reserva o seu espaço antes dela
+        self._area_lista.pack(fill="both", expand=True)
         self._atualizar_rotulos()
 
     def _atualizar_rotulos(self) -> None:
@@ -118,11 +125,34 @@ class App:
 
     def _recarregar_lista(self) -> None:
         self.lista.delete(*self.lista.get_children())
+        self._miniaturas = []
+        total = len(self.sessao.evidencias)
         for i, ev in enumerate(self.sessao.evidencias, start=1):
-            self.lista.insert("", "end", iid=str(i - 1),
-                              values=(i, ROTULOS.get(ev.tipo, ev.tipo), ev.momento.strftime("%H:%M:%S")))
-        if self.sessao.evidencias:
-            self.lista.see(str(len(self.sessao.evidencias) - 1))
+            foto = miniaturas.obter(self.sessao.caminho(ev))
+            if foto is not None:
+                self._miniaturas.append(foto)
+            self.lista.insert("", "end", iid=str(i - 1), image=foto or "",
+                              text=f"  {i}   {ROTULOS.get(ev.tipo, ev.tipo)}  ·  {ev.momento.strftime('%H:%M:%S')}")
+        self._dica.configure(text="Duplo clique abre a imagem · Delete remove a selecionada" if total else "")
+        if total:
+            self._vazio.pack_forget()
+            self._moldura_lista.pack(fill="both", expand=True)
+            self.lista.see(str(total - 1))
+            self.var_contador.set(f"{total} {'evidência' if total == 1 else 'evidências'}")
+        else:
+            self._moldura_lista.pack_forget()
+            self._vazio.configure(text="Nenhuma evidência ainda.\n\nCapture com os botões acima ou com os atalhos "
+                                       f"({atalhos.formatar(self.cfg.atalho_tela)} para a tela inteira).")
+            self._vazio.pack(fill="both", expand=True)
+            self.var_contador.set("Evidências")
+        estilo.ativar(self.btn_finalizar, bool(total))
+        self.btn_finalizar.configure(text=f"Finalizar teste  ·  {total}" if total else "Finalizar teste")
+
+    def _menu_da_evidencia(self, evento) -> None:
+        iid = self.lista.identify_row(evento.y)
+        if iid:
+            self.lista.selection_set(iid)
+            self.menu_evidencia.tk_popup(evento.x_root, evento.y_root)
 
     def _selecionada(self) -> int | None:
         marcado = self.lista.selection()
@@ -247,21 +277,23 @@ class App:
         janela.title("Teste finalizado")
         janela.transient(self.raiz)
         janela.resizable(False, False)
-        ttk.Label(janela, text=f"Evidências e PDF salvos em:\n{pasta}", justify="left",
-                  wraplength=460, padding=16).pack()
-        botoes = ttk.Frame(janela, padding=(16, 0, 16, 16))
-        botoes.pack(anchor="e")
+        corpo = ttk.Frame(janela, padding=(22, 20, 22, 6))
+        corpo.pack(fill="x")
+        ttk.Label(corpo, text="✓  Teste finalizado", style="Titulo.TLabel").pack(anchor="w")
+        ttk.Label(corpo, text=pasta.name, wraplength=440, justify="left").pack(anchor="w", pady=(8, 0))
+        ttk.Label(corpo, text=f"As evidências e o PDF estão em {pasta.parent}", style="Suave.TLabel",
+                  wraplength=440, justify="left").pack(anchor="w", pady=(2, 0))
+        botoes = ttk.Frame(janela, padding=(22, 14, 22, 20))
+        botoes.pack(fill="x")
         escolha: list[str] = []
 
         def fechar(acao: str = "") -> None:
             escolha.append(acao)
             janela.destroy()
 
-        ttk.Button(botoes, text="Preparar prompt para IA…", command=lambda: fechar("prompt")).pack(
-            side="left", padx=(0, 6))
-        ttk.Button(botoes, text="Abrir pasta", command=lambda: fechar("pasta")).pack(
-            side="left", padx=(0, 6))
-        ttk.Button(botoes, text="Fechar", command=fechar).pack(side="left")
+        estilo.botao_primario(botoes, "Enviar ao Claude…", lambda: fechar("prompt")).pack(side="left")
+        ttk.Button(botoes, text="Abrir pasta", command=lambda: fechar("pasta")).pack(side="left", padx=(10, 0))
+        ttk.Button(botoes, text="Fechar", command=fechar).pack(side="right")
         janela.protocol("WM_DELETE_WINDOW", fechar)
         janela.update_idletasks()
         janela.grab_set()

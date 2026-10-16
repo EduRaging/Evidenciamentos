@@ -56,6 +56,64 @@ def listar_pdfs(base: Path | str, limite: int = 300) -> list[RegistroPdf]:
     return achados[:max(1, limite)]
 
 
+@dataclass(frozen=True)
+class TesteRegistrado:
+    """Um teste (uma pasta) com os PDFs dele: o de evidências e os relatórios."""
+    pasta: Path
+    teste: str  # nome do teste (a pasta sem o prefixo de data)
+    pasta_nome: str
+    momento: datetime  # quando o teste foi feito (prefixo da pasta; senão, o PDF mais antigo)
+    evidencias: RegistroPdf | None  # o "Evidencias - ….pdf" gerado pelo app
+    relatorios: tuple[RegistroPdf, ...]  # do mais recente para o mais antigo
+
+    @property
+    def principal(self) -> RegistroPdf | None:
+        """O PDF que as ações abrem por padrão: o relatório mais recente, ou o de evidências."""
+        return self.relatorios[0] if self.relatorios else self.evidencias
+
+    @property
+    def pdfs(self) -> list[RegistroPdf]:
+        return ([self.evidencias] if self.evidencias else []) + list(self.relatorios)
+
+
+def _momento_da_pasta(nome: str) -> datetime | None:
+    try:
+        return datetime.strptime(nome[:15], "%Y-%m-%d_%H%M")
+    except ValueError:
+        return None
+
+
+def agrupar_por_teste(registros: list[RegistroPdf]) -> list[TesteRegistrado]:
+    """Junta os PDFs por pasta de teste, um item por teste, do mais recente para o mais antigo."""
+    por_pasta: dict[Path, list[RegistroPdf]] = {}
+    for r in registros:
+        por_pasta.setdefault(r.caminho.parent, []).append(r)
+    com_chave = []
+    for pasta, itens in por_pasta.items():
+        evidencias = sorted((i for i in itens if i.tipo == TIPO_EVIDENCIAS), key=lambda i: i.momento, reverse=True)
+        relatorios = sorted((i for i in itens if i.tipo == TIPO_RELATORIO), key=lambda i: i.momento, reverse=True)
+        mais_antigo = min(i.momento for i in itens)  # o PDF mais antigo é o do dia do teste, não o relatório
+        momento = _momento_da_pasta(pasta.name) or mais_antigo
+        teste = TesteRegistrado(pasta, itens[0].teste, pasta.name, momento,
+                                evidencias[0] if evidencias else None, tuple(relatorios))
+        com_chave.append(((momento, mais_antigo), teste))  # a pasta só tem minutos: o PDF desempata
+    com_chave.sort(key=lambda par: par[0], reverse=True)
+    return [teste for _, teste in com_chave]
+
+
+def filtrar_testes(testes: list[TesteRegistrado], texto: str) -> list[TesteRegistrado]:
+    """Mantém os testes em que TODAS as palavras aparecem no nome do teste ou nos nomes dos PDFs."""
+    palavras = _normalizar(texto).split()
+    if not palavras:
+        return list(testes)
+    resultado = []
+    for t in testes:
+        alvo = _normalizar(" ".join([t.teste, t.pasta_nome] + [p.caminho.name for p in t.pdfs]))
+        if all(p in alvo for p in palavras):
+            resultado.append(t)
+    return resultado
+
+
 def _normalizar(texto: str) -> str:
     """Minúsculas e sem acentos, para o filtro achar 'relatorio' em 'Relatório'."""
     base = unicodedata.normalize("NFD", texto.casefold())

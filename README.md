@@ -40,7 +40,7 @@ O atalho aponta para esta pasta; se o projeto for movido, apague-o e rode o `Ini
 
    Todos os atalhos podem ser trocados em **Configurações…** (clique em *Alterar…* e pressione a
    nova combinação).
-3. **Finalizar e gerar PDF** cria, dentro da pasta base (padrão: `Documentos\Evidencias`):
+3. **Finalizar teste** cria, dentro da pasta base (padrão: `Documentos\Evidencias`):
 
    ```
    2026-10-09_1432 - Nome do teste\
@@ -52,38 +52,47 @@ O atalho aponta para esta pasta; se o projeto for movido, apague-o e rode o `Ini
    O PDF tem uma capa (nome, data, testador, quantidade) e uma evidência por página, com
    data/hora e tipo (tela inteira ou recorte).
 
-## Aba "PDFs gerados"
+## Aba "Meus testes"
 
-A segunda aba da janela principal é o **registro dos PDFs** de todos os testes da pasta de
-evidências: os de evidências (gerados ao finalizar) e os relatórios (por exemplo, os que a IA grava
-pela extensão MCP). Do mais recente para o mais antigo, com data, teste, tipo e tamanho. A lista
-se atualiza sozinha enquanto a aba está à vista (a cada ~6 s), então um relatório criado por fora
-aparece sem fazer nada. O campo **Filtrar** ignora acentos e combina palavras ("relatorio despesa").
+A segunda aba da janela principal lista **um item por teste** da pasta de evidências, do mais
+recente para o mais antigo, com a data, o nome e um ✓ em **Evidências** (o PDF que o app gera ao
+finalizar) e em **Relatório** (por exemplo, o que o Claude grava pela extensão; "✓ 2" quando há mais
+de um). A lista se atualiza sozinha enquanto a aba está à vista (a cada ~6 s), mantendo a seleção,
+então um relatório criado por fora aparece sem fazer nada. O campo de busca ignora acentos e
+combina palavras ("relatorio despesa"), olhando também os nomes dos PDFs.
 
-Selecione um PDF (ou clique com o botão direito) e use:
+Só dois botões ficam à vista, e o resto está em **Mais ▾** (ou no clique direito):
 
-| Ação | O que faz |
+| Botão / ação | O que faz |
 |---|---|
-| **Abrir (ler)** | abre no leitor de PDF padrão (também com dois cliques ou Enter) |
-| **Mostrar na pasta** | abre o Explorador de Arquivos com o PDF selecionado |
-| **Copiar caminho** | copia o caminho completo como texto |
-| **Copiar arquivo** | copia o **arquivo** (não o texto): cole com Ctrl+V num e-mail, no Teams ou numa pasta |
-| **Salvar cópia…** | grava uma cópia onde você escolher (baixar); o original fica no lugar |
-| **Enviar por e-mail…** | abre uma mensagem nova com assunto e texto prontos e deixa o PDF copiado: cole (Ctrl+V) para anexar |
+| **Enviar ao Claude** | abre a janela do prompt para os testes selecionados (veja abaixo) |
+| **Abrir PDF** | abre o relatório mais recente do teste (ou o de evidências, se não houver relatório); também com dois cliques ou Enter |
+| **Mais ▾ › Evidências / Relatório** | para cada PDF do teste: Abrir, **Copiar arquivo** (cole com Ctrl+V num e-mail, no Teams ou numa pasta), **Salvar cópia…**, **Enviar por e-mail…** e Copiar caminho |
+| **Mais ▾ › Mostrar a pasta do teste** | abre o Explorador de Arquivos com o PDF selecionado |
+| **Mais ▾ › Arquivar teste…** | move a pasta para `_arquivo`, dentro da pasta de evidências, **sem apagar nada** (para desfazer, mova a pasta de volta). O teste sai da lista e do alcance do Claude (ele ignora pastas que começam com `_`). Funciona com vários testes de uma vez; se um PDF ou imagem estiver aberto em outro programa, o Windows recusa e o app avisa |
+| **Mais ▾ › Abrir a pasta dos arquivados** | abre `_arquivo` |
 
 O padrão de e-mail do Windows (`mailto:`) não permite anexar arquivos, por isso o anexo é feito
 colando o PDF já copiado.
 
-**Enviar ao Claude para analisar…** — com **Ctrl** ou **Shift** o senhor seleciona **vários PDFs**
-(até 12 testes por vez) e o botão (ou o menu do botão direito) abre a janela do prompt já com esses
-testes. Cada PDF aponta para a pasta do seu teste: o Claude lê as **imagens** dessa pasta pela
-extensão (não o conteúdo do PDF), e dois PDFs do mesmo teste contam como um só. O prompt pede **um
-relatório por teste, salvo na pasta do próprio teste** (não um consolidado), um teste por vez, e ao
-final uma tabela com o status sugerido e o caminho de cada PDF. Os campos Sistema/ambiente, Objetivo,
-Critérios e Observações valem para todos os testes selecionados. Testes sem imagens são ignorados com
-aviso. Com vários testes só existe o modo "Claude com a extensão" (com anexos não dá para misturar
-testes), e o Claude pode pedir permissão para gravar cada PDF. Se algum teste não couber no
-limite de ~12 mil caracteres do link, o app copia o prompt para colar.
+**Enviar ao Claude** — com **Ctrl** ou **Shift** o senhor seleciona **vários testes** (até 12 por
+vez). O Claude lê as **imagens** da pasta de cada teste pela extensão (não o conteúdo dos PDFs). O
+prompt pede **um relatório por teste, salvo na pasta do próprio teste** (não um consolidado), um
+teste por vez, e ao final uma tabela com o status sugerido e o caminho de cada PDF. Os detalhes
+(sistema/ambiente, objetivo, critérios e observações) valem para todos os testes selecionados.
+Testes sem imagens são ignorados com aviso. Com vários testes só existe o modo "Claude com a
+extensão" (com anexos não dá para misturar testes), e o Claude pode pedir permissão para gravar
+cada PDF. Se o texto não couber no limite de ~12 mil caracteres do link, o app copia o prompt
+para colar.
+
+## A janela "Capturar"
+
+O nome do teste, os dois botões de captura (com os atalhos) e, logo abaixo, as **evidências da
+sessão com miniatura**, numeradas, com o tipo e a hora. Enquanto não há nenhuma, a área mostra um
+convite em vez de uma tabela vazia. Duplo clique (ou Enter) abre a imagem; **Delete** (ou o clique
+direito) remove a selecionada. A ação principal é **Finalizar teste**, que mostra quantas
+evidências entram e só liga quando há ao menos uma; **Descartar** e **Configurações** são
+secundárias. Ao finalizar, a janela de conclusão oferece **Enviar ao Claude…** como ação principal.
 
 ## Prompt para IA (casos de teste e relatório)
 
@@ -91,11 +100,14 @@ O app não se conecta a nenhuma IA: ele monta um **prompt pronto** para o senhor
 desktop (um clique abre a conversa com o texto preenchido) ou colar na IA que preferir (e que a
 empresa aprove). Sem chave de API e sem custo, e sem tráfego de rede do app.
 
-1. Ao finalizar um teste, clique em **Preparar prompt para IA…** (ou use o botão de mesmo nome na
-   janela principal, que abre o último teste; **Trocar…** escolhe outro, inclusive testes antigos).
-2. Preencha o que souber: sistema/ambiente, objetivo, critérios de aceite e observações. A prévia
-   do prompt atualiza enquanto o senhor digita. Escolha o que a IA deve gerar: casos de teste,
-   relatório de execução ou os dois. A caixa **Pedir a entrega em PDF** (marcada por padrão) faz o
+1. Ao finalizar um teste, clique em **Enviar ao Claude…** (ou, na aba **Meus testes**, selecione o(s)
+   teste(s) e use **Enviar ao Claude**; na janela do prompt, **Trocar…** escolhe outro teste).
+2. A janela abre **só com o essencial**: o(s) teste(s), uma linha-resumo do que o Claude vai gerar
+   e o botão **Enviar ao Claude** (mais **Copiar prompt**). O resto fica recolhido e abrir uma
+   seção fecha as outras: **Alterar** (as opções abaixo), **Adicionar detalhes do teste** (sistema/
+   ambiente, objetivo, critérios de aceite e observações, tudo opcional) e **Ver o texto que será
+   enviado** (a prévia, que atualiza enquanto o senhor digita). Em **Alterar** o senhor escolhe o que
+   a IA deve gerar: casos de teste, relatório de execução ou os dois. A caixa **Pedir a entrega em PDF** (marcada por padrão) faz o
    prompt pedir que a IA devolva o resultado já como **arquivo PDF para baixar**, com capa e as
    imagens das evidências quando ela conseguir. Se a IA não gerar arquivos, o prompt manda que ela
    avise e entregue o conteúdo em Markdown, pronto para converter em PDF.
@@ -135,7 +147,7 @@ empresa aprove). Sem chave de API e sem custo, e sem tráfego de rede do app.
    estiver instalado, o app copia o prompt e avisa para colar (Ctrl+V).
    Para outra IA, use **Copiar prompt**, cole e **anexe o PDF** do teste (ele já traz as evidências
    numeradas e com data/hora; o prompt se refere a "Evidência N"). Se a IA não ler imagens dentro
-   de PDF, anexe os PNGs numerados da pasta (**Abrir pasta do teste**).
+   de PDF, anexe os PNGs numerados da pasta do teste (**Mais ▾ › Mostrar a pasta do teste**, na aba Meus testes).
 
 O prompt manda a IA se basear só no que está visível, escrever "não evidenciado" quando não der
 para confirmar, citar o número da evidência, não reproduzir dados pessoais e **sugerir** o status

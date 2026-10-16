@@ -1,4 +1,4 @@
-"""Janela "Preparar prompt para IA": monta o texto, mostra a prévia, envia ao Claude ou copia."""
+"""Janela "Enviar ao Claude": o essencial à vista (um botão); opções, detalhes e prévia ficam recolhidos."""
 from __future__ import annotations
 
 import os
@@ -7,16 +7,18 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Sequence
 
-from . import claude_desktop, extensao_claude, metadados
+from . import claude_desktop, estilo, extensao_claude, metadados
 from .prompt_ia import MAX_TESTES, SAIDAS, Formulario, montar_prompt, montar_prompt_varios
 
 ARQUIVO_PROMPT = "Prompt para IA.txt"
-AVISO = ("Antes de enviar ou anexar, confira se as evidências não têm dados pessoais ou sensíveis e se a "
-         "ferramenta de IA que o senhor vai usar é aprovada pela empresa.")
+AVISO = ("Antes de enviar, confira se as evidências não têm dados pessoais ou sensíveis e se a ferramenta "
+         "de IA é aprovada pela empresa.")
+_RESUMO_DA_SAIDA = {"casos": "Casos de teste", "relatorio": "Relatório de execução",
+                    "ambos": "Casos de teste e relatório"}
 
 
 def _campo_texto(pai: tk.Misc, linhas: int) -> tk.Text:
-    texto = tk.Text(pai, height=linhas, wrap="word", font=("Segoe UI", 9), undo=True,
+    texto = tk.Text(pai, height=linhas, wrap="word", font=(estilo.FAMILIA, 10), undo=True,
                     relief="solid", borderwidth=1)
     texto.bind("<Tab>", lambda _e: (texto.tk_focusNext().focus_set(), "break")[1])
     return texto
@@ -66,16 +68,15 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
     estado = {"teste": testes[0], "testes": testes, "agendado": None}
 
     janela = tk.Toplevel(pai)
-    janela.title("Preparar prompt para IA" + (f" — {len(testes)} testes" if multiplo else ""))
-    janela.geometry("780x760")
-    janela.minsize(700, 720)
+    janela.title("Enviar ao Claude" + (f" — {len(testes)} testes" if multiplo else ""))
+    janela.minsize(600, 1)
     janela.transient(pai)
 
-    quadro = ttk.Frame(janela, padding=14)
+    quadro = ttk.Frame(janela, padding=(20, 18, 20, 14))
     quadro.pack(fill="both", expand=True)
-    quadro.columnconfigure(1, weight=1)
 
     var_titulo = tk.StringVar()
+    var_resumo = tk.StringVar()
     var_ambiente = tk.StringVar()
     var_saida = tk.StringVar(value="ambos")
     var_pdf = tk.BooleanVar(value=True)
@@ -85,80 +86,127 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
     var_aviso_extensao = tk.StringVar()
     var_status = tk.StringVar()
 
-    # --- teste escolhido
-    ttk.Label(quadro, text="Testes" if multiplo else "Teste").grid(row=0, column=0, sticky="nw")
-    ttk.Label(quadro, textvariable=var_titulo, font=("Segoe UI", 10, "bold"), wraplength=470,
-              justify="left").grid(row=0, column=1, sticky="w", padx=8)
-    botao_trocar = ttk.Button(quadro, text="Trocar…", state="disabled" if multiplo else "normal")
-    botao_trocar.grid(row=0, column=2, sticky="n")
+    def reajustar() -> None:
+        """Seções recolhidas mudam o tamanho: deixa o Tk recalcular a altura da janela."""
+        janela.update_idletasks()
+        janela.geometry("")
 
-    # --- formulário
-    de_todos = "\n(de todos os testes)" if multiplo else ""
-    ttk.Label(quadro, text="Sistema / ambiente" + de_todos).grid(row=1, column=0, sticky="w", pady=(10, 0))
-    ttk.Entry(quadro, textvariable=var_ambiente).grid(row=1, column=1, columnspan=2, sticky="ew",
-                                                      padx=8, pady=(10, 0))
+    secoes: list = []  # (fechar, está_aberta) de cada seção: abrir uma fecha as outras, e a janela não passa de uma tela
 
-    campos = {}
-    for linha, (chave, rotulo, altura) in enumerate((
-            ("objetivo", "Objetivo do teste" + de_todos, 3),
-            ("criterios", "Critérios de aceite /\nresultado esperado" + de_todos, 3),
-            ("observacoes", "Observações" + de_todos, 2)), start=2):
-        ttk.Label(quadro, text=rotulo).grid(row=linha, column=0, sticky="nw", pady=(8, 0))
-        campos[chave] = _campo_texto(quadro, altura)
-        campos[chave].grid(row=linha, column=1, columnspan=2, sticky="ew", padx=8, pady=(8, 0))
+    def secao_recolhivel(pai_: tk.Misc, rotulo_fechada: str, rotulo_aberta: str, ao_alternar=None):
+        """Devolve (botão que alterna, quadro do conteúdo, função de alternar); o conteúdo começa oculto."""
+        conteudo = ttk.Frame(pai_)
+        botao = ttk.Button(pai_, text=rotulo_fechada, style="Link.Toolbutton")
 
-    ttk.Label(quadro, text="O que a IA deve gerar").grid(row=5, column=0, sticky="nw", pady=(10, 0))
-    opcoes = ttk.Frame(quadro)
-    opcoes.grid(row=5, column=1, columnspan=2, sticky="w", padx=8, pady=(10, 0))
+        def fechar() -> None:
+            conteudo.pack_forget()
+            botao.configure(text=rotulo_fechada)
+            if ao_alternar:
+                ao_alternar()
+
+        def alternar() -> None:
+            if conteudo.winfo_manager():
+                fechar()
+            else:
+                for outra_fechar, outra_aberta in secoes:
+                    if outra_aberta():
+                        outra_fechar()
+                conteudo.pack(fill="both", expand=True, pady=(6, 0), after=botao)
+                botao.configure(text=rotulo_aberta)
+                if ao_alternar:
+                    ao_alternar()
+            reajustar()
+
+        botao.configure(command=alternar)
+        secoes.append((fechar, lambda: bool(conteudo.winfo_manager())))
+        return botao, conteudo, alternar
+
+    # --- 1. qual teste (ou quais)
+    cabeca = ttk.Frame(quadro)
+    cabeca.pack(fill="x")
+    ttk.Label(cabeca, textvariable=var_titulo, style="Titulo.TLabel", wraplength=470, justify="left").pack(
+        side="left", fill="x", expand=True)
+    botao_trocar = None
+    if not multiplo:
+        botao_trocar = ttk.Button(cabeca, text="Trocar…")
+        botao_trocar.pack(side="right", anchor="n")
+
+    # --- 2. o que o Claude vai gerar: uma linha-resumo; o detalhe fica recolhido
+    ttk.Label(quadro, text="O Claude vai gerar", style="Secao.TLabel").pack(anchor="w", pady=(16, 0))
+    linha_resumo = ttk.Frame(quadro)
+    linha_resumo.pack(fill="x")
+    ttk.Label(linha_resumo, textvariable=var_resumo, wraplength=540, justify="left").pack(side="left", fill="x",
+                                                                                          expand=True)
+    sec_opcoes = ttk.Frame(quadro)
+    sec_opcoes.pack(fill="x")
+    botao_opcoes, opcoes, _ = secao_recolhivel(sec_opcoes, "Alterar ▾", "Ocultar ▴")
+    botao_opcoes.pack(anchor="w")
     linha_saida = ttk.Frame(opcoes)
     linha_saida.pack(anchor="w")
     for chave, rotulo in SAIDAS.items():
-        ttk.Radiobutton(linha_saida, text=rotulo, value=chave, variable=var_saida).pack(
-            side="left", padx=(0, 14))
-    ttk.Checkbutton(linha_saida, text="Pedir a entrega em PDF", variable=var_pdf).pack(
-        side="left", padx=(10, 0))
+        ttk.Radiobutton(linha_saida, text=rotulo, value=chave, variable=var_saida).pack(side="left", padx=(0, 14))
+    ttk.Checkbutton(opcoes, text="Pedir a entrega em PDF", variable=var_pdf).pack(anchor="w", pady=(4, 0))
     ttk.Checkbutton(opcoes, text="Sugerir casos de teste adicionais (técnicas ISTQB/BSTQB)",
-                    variable=var_sugerir).pack(anchor="w", pady=(4, 0))
+                    variable=var_sugerir).pack(anchor="w", pady=(2, 0))
     ttk.Checkbutton(opcoes, text="Avaliar o que é automatizável e gerar código Playwright (Python)",
-                    variable=var_automacao).pack(anchor="w", pady=(4, 0))
+                    variable=var_automacao).pack(anchor="w", pady=(2, 0))
     chk_extensao = ttk.Checkbutton(
         opcoes, variable=var_extensao, text="Claude com a extensão instalada (ele lê as evidências direto da pasta)"
         + (" — necessário com vários testes" if multiplo else ""))
-    chk_extensao.pack(anchor="w", pady=(4, 0))
+    chk_extensao.pack(anchor="w", pady=(2, 0))
     if multiplo:
         var_extensao.set(True)
         chk_extensao.state(["disabled"])  # com anexos não dá para misturar testes: só a extensão lê as pastas
 
-    # --- prévia
-    ttk.Label(quadro, text="Prévia do prompt (é isto que será enviado ou copiado)").grid(
-        row=6, column=0, columnspan=3, sticky="w", pady=(14, 2))
-    moldura = ttk.Frame(quadro)
-    moldura.grid(row=7, column=0, columnspan=3, sticky="nsew")
-    quadro.rowconfigure(7, weight=1)
-    previa = tk.Text(moldura, height=5, wrap="word", font=("Consolas", 9), state="disabled",
+    # --- 3. detalhes do teste (opcional)
+    de_todos = " (valem para todos os testes)" if multiplo else ""
+    sec_detalhes = ttk.Frame(quadro)
+    sec_detalhes.pack(fill="x", pady=(10, 0))
+    botao_detalhes, detalhes, _ = secao_recolhivel(sec_detalhes, "Adicionar detalhes do teste ▾",
+                                                   "Ocultar detalhes ▴",
+                                                   lambda: atualizar_indicador_detalhes())
+    botao_detalhes.pack(anchor="w")
+    detalhes.columnconfigure(1, weight=1)
+    ttk.Label(detalhes, text="Sistema / ambiente").grid(row=0, column=0, sticky="w", pady=(0, 6))
+    ttk.Entry(detalhes, textvariable=var_ambiente).grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=(0, 6))
+    campos = {}
+    for linha, (chave, rotulo, altura) in enumerate((
+            ("objetivo", "Objetivo", 2), ("criterios", "Critérios de aceite", 2),
+            ("observacoes", "Observações", 2)), start=1):
+        ttk.Label(detalhes, text=rotulo).grid(row=linha, column=0, sticky="nw", pady=(0, 6))
+        campos[chave] = _campo_texto(detalhes, altura)
+        campos[chave].grid(row=linha, column=1, sticky="ew", padx=(10, 0), pady=(0, 6))
+    if multiplo:
+        ttk.Label(detalhes, text="Os detalhes" + de_todos + ".", style="Suave.TLabel").grid(
+            row=4, column=0, columnspan=2, sticky="w")
+
+    # --- 4. avisos (só aparecem quando há algo a avisar)
+    aviso_extensao = ttk.Label(quadro, textvariable=var_aviso_extensao, style="Alerta.TLabel", wraplength=560,
+                               justify="left")
+
+    # --- 5. ação principal, ação secundária e a prévia recolhida
+    rodape = ttk.Frame(quadro)
+    rodape.pack(fill="x", pady=(14, 0))
+    botao_enviar = estilo.botao_primario(rodape, "Enviar ao Claude", None)
+    botao_enviar.pack(side="left")
+    botao_copiar = ttk.Button(rodape, text="Copiar prompt")
+    botao_copiar.pack(side="left", padx=(10, 0))
+    ttk.Button(rodape, text="Fechar", command=janela.destroy).pack(side="right")
+    sec_previa = ttk.Frame(quadro)
+    sec_previa.pack(fill="x", pady=(8, 0))
+    botao_previa, moldura_previa, _ = secao_recolhivel(sec_previa, "Ver o texto que será enviado ▾",
+                                                       "Ocultar o texto ▴")
+    botao_previa.pack(anchor="w")
+    previa = tk.Text(moldura_previa, height=8, wrap="word", font=("Consolas", 9), state="disabled",
                      background="#f5f5f5", relief="solid", borderwidth=1)
-    barra = ttk.Scrollbar(moldura, orient="vertical", command=previa.yview)
+    barra = ttk.Scrollbar(moldura_previa, orient="vertical", command=previa.yview)
     previa.configure(yscrollcommand=barra.set)
     previa.pack(side="left", fill="both", expand=True)
     barra.pack(side="right", fill="y")
 
-    ttk.Label(quadro, textvariable=var_aviso_extensao, foreground="#b00020", wraplength=700,
-              justify="left").grid(row=8, column=0, columnspan=3, sticky="w", pady=(8, 0))
-    ttk.Label(quadro, text=AVISO, foreground="#8a4b00", wraplength=700, justify="left").grid(
-        row=9, column=0, columnspan=3, sticky="w", pady=(8, 0))
-
-    # --- botões
-    rodape = ttk.Frame(quadro)
-    rodape.grid(row=10, column=0, columnspan=3, sticky="ew", pady=(10, 0))
-    botao_enviar = ttk.Button(rodape, text="Enviar ao Claude")
-    botao_enviar.pack(side="left", ipady=4, ipadx=8)
-    botao_copiar = ttk.Button(rodape, text="Copiar prompt")
-    botao_copiar.pack(side="left", padx=8)
-    botao_pasta = ttk.Button(rodape, text="Abrir pasta dos testes" if multiplo else "Abrir pasta do teste")
-    botao_pasta.pack(side="left")
-    ttk.Button(rodape, text="Fechar", command=janela.destroy).pack(side="right")
-    ttk.Label(quadro, textvariable=var_status, foreground="#1b5e20", wraplength=700,
-              justify="left").grid(row=11, column=0, columnspan=3, sticky="w", pady=(8, 0))
+    ttk.Label(quadro, textvariable=var_status, style="Ok.TLabel", wraplength=560, justify="left").pack(
+        anchor="w", pady=(10, 0))
+    ttk.Label(quadro, text=AVISO, style="Suave.TLabel", wraplength=560, justify="left").pack(anchor="w", pady=(8, 0))
 
     # --- lógica
     def formulario() -> Formulario:
@@ -179,6 +227,26 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
             return montar_prompt_varios(estado["testes"], formulario())
         return montar_prompt(estado["teste"], formulario())
 
+    def atualizar_resumo(*_args) -> None:
+        partes = [_RESUMO_DA_SAIDA.get(var_saida.get(), _RESUMO_DA_SAIDA["ambos"])]
+        if var_pdf.get():
+            partes.append("entrega em PDF")
+        if var_sugerir.get():
+            partes.append("casos sugeridos")
+        if var_automacao.get():
+            partes.append("avaliação de automação")
+        partes.append("lendo pela extensão" if var_extensao.get() else "com anexos")
+        var_resumo.set(" · ".join(partes))
+
+    def atualizar_indicador_detalhes(*_args) -> None:
+        preenchido = bool(var_ambiente.get().strip() or any(c.get("1.0", "end").strip() for c in campos.values()))
+        aberto = bool(detalhes.winfo_manager())
+        if aberto:
+            botao_detalhes.configure(text="Ocultar detalhes ▴")
+        else:
+            botao_detalhes.configure(text="Detalhes do teste: preenchidos (editar) ▾" if preenchido
+                                     else "Adicionar detalhes do teste ▾")
+
     def problemas_da_extensao() -> list[str]:
         """O que impediria o Claude de ler o(s) teste(s) pela extensão (vazio se a caixa está desmarcada)."""
         if not var_extensao.get():
@@ -189,7 +257,13 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
         return list(dict.fromkeys(achados))  # o mesmo aviso não se repete para cada teste
 
     def atualizar_aviso_extensao(*_args) -> None:
-        var_aviso_extensao.set("\n".join(f"⚠ {p}" for p in problemas_da_extensao()))
+        texto = "\n".join(f"⚠ {p}" for p in problemas_da_extensao())
+        var_aviso_extensao.set(texto)
+        if texto and not aviso_extensao.winfo_manager():
+            aviso_extensao.pack(anchor="w", pady=(10, 0), before=rodape)
+        elif not texto and aviso_extensao.winfo_manager():
+            aviso_extensao.pack_forget()
+        reajustar()
 
     def atualizar_previa(*_args) -> None:
         estado["agendado"] = None
@@ -203,6 +277,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
         teste = estado["teste"]
         var_titulo.set(_resumo_dos_testes(estado["testes"]) if multiplo
                        else f"{teste.nome_teste}  ({len(teste.evidencias)} evidências)")
+        atualizar_indicador_detalhes()
 
     def agendar(*_args) -> None:
         if estado["agendado"]:
@@ -265,7 +340,7 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
         if not escolhida:
             return
         try:
-            estado["teste"] = metadados.ler(escolhida)
+            estado["teste"] = estado["testes"][0] = metadados.ler(escolhida)
         except ValueError as exc:
             messagebox.showwarning("Pasta inválida", str(exc), parent=janela)
             return
@@ -273,24 +348,22 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
         atualizar_previa()
         atualizar_aviso_extensao()
 
-    botao_trocar.configure(command=trocar)
+    if botao_trocar is not None:
+        botao_trocar.configure(command=trocar)
     botao_enviar.configure(command=enviar)
     botao_copiar.configure(command=copiar)
-    botao_pasta.configure(command=lambda: os.startfile(
-        estado["teste"].pasta.parent if multiplo else estado["teste"].pasta))
+    for variavel in (var_saida, var_pdf, var_sugerir, var_automacao, var_extensao):
+        variavel.trace_add("write", agendar)
+        variavel.trace_add("write", atualizar_resumo)
     var_ambiente.trace_add("write", agendar)
-    var_saida.trace_add("write", agendar)
-    var_pdf.trace_add("write", agendar)
-    var_sugerir.trace_add("write", agendar)
-    var_automacao.trace_add("write", agendar)
-    var_extensao.trace_add("write", agendar)
     var_extensao.trace_add("write", atualizar_aviso_extensao)
     for campo in campos.values():
         campo.bind("<KeyRelease>", agendar)
 
+    atualizar_resumo()
     atualizar_previa()
     atualizar_aviso_extensao()
-    janela.update_idletasks()
+    reajustar()
     janela.focus_force()
     pai.wait_window(janela)
     return estado["teste"].pasta

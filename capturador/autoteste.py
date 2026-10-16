@@ -14,8 +14,8 @@ from pathlib import Path
 
 from PIL import Image, ImageTk
 
-from . import (__version__, atalhos, captura, claude_desktop, dialogo_prompt, metadados, painel_pdfs,
-               recursos, registro_pdfs, winutil)
+from . import (__version__, arquivamento, atalhos, captura, claude_desktop, dialogo_prompt, estilo, metadados,
+               miniaturas, painel_pdfs, recursos, registro_pdfs, winutil)
 from .pdf_relatorio import _registrar_fontes
 from .prompt_ia import Formulario, montar_prompt
 from .sessao import Sessao
@@ -99,6 +99,32 @@ def _envio_ao_claude() -> str:
     return f"link de {len(link)} caracteres pronto para o {Path(comando[0]).name} registrado"
 
 
+def _miniaturas_e_arquivamento() -> str:
+    """Miniaturas da lista, um item por teste e arquivar sem apagar (o que a janela nova usa)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "base"
+        pasta = _finalizar_exemplo(Path(tmp))
+        raiz = tk.Tk()
+        raiz.withdraw()
+        try:
+            png = next(pasta.glob("*.png"))
+            foto = miniaturas.obter(png)
+            if foto is None or (foto.width(), foto.height()) != miniaturas.TAMANHO:
+                raise AssertionError("a miniatura não saiu no tamanho esperado")
+            estilo.aplicar(raiz)
+            botao = estilo.botao_primario(raiz, "Teste", lambda: None)
+            estilo.ativar(botao, False)
+        finally:
+            raiz.destroy()
+        testes = registro_pdfs.agrupar_por_teste(registro_pdfs.listar_pdfs(pasta.parent))
+        if len(testes) != 1 or testes[0].evidencias is None or testes[0].principal is None:
+            raise AssertionError(f"agrupamento inesperado: {testes}")
+        destino = arquivamento.arquivar(pasta, pasta.parent)
+        if pasta.exists() or not (destino / png.name).exists() or registro_pdfs.listar_pdfs(pasta.parent):
+            raise AssertionError("o arquivamento não moveu a pasta inteira")
+    return "miniatura, estilo, um item por teste e arquivar sem apagar"
+
+
 def _registro_de_pdfs() -> str:
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp) / "base"
@@ -135,6 +161,7 @@ VERIFICACOES = (
     ("prompt para IA", _prompt_ia),
     ("envio ao Claude desktop", _envio_ao_claude),
     ("registro de PDFs", _registro_de_pdfs),
+    ("miniaturas e arquivamento", _miniaturas_e_arquivamento),
 )
 
 
