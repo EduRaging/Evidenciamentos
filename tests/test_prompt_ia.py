@@ -325,7 +325,7 @@ class MontarPromptVarios(unittest.TestCase):
     def test_com_o_maximo_de_testes_ainda_cabe_no_link_do_claude(self):
         from capturador import claude_desktop
         base = tres_testes()[0]
-        doze = [PastaTeste(pasta=Path(f"C:/Users/carlos.moura/Documents/Evidencias/2026-10-15_16{i:02d} - Teste número {i} com nome longo"),
+        doze = [PastaTeste(pasta=Path(f"C:/Users/usuario.exemplo/Documents/Evidencias/2026-10-15_16{i:02d} - Teste número {i} com nome longo"),
                            nome_teste=f"Teste número {i} com nome longo", testador="Carlos Eduardo de Moura", pdf=None,
                            evidencias=base.evidencias * 9) for i in range(12)]
         prompt = self.montar(doze, Formulario())
