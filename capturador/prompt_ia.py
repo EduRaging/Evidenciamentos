@@ -112,9 +112,34 @@ def _anexo(teste: PastaTeste, via_mcp: bool = False) -> str:
     return "Anexei as imagens das evidências, com os nomes de arquivo da lista abaixo."
 
 
-def _secao_entrega(nome_teste: str, saida: str) -> str:
-    titulo = "Casos de teste" if saida == "casos" else "Relatório de testes"
+PREFIXO_SUGESTOES = "Sugestões de casos de teste"  # o registro de PDFs reconhece o arquivo por este começo
+
+
+def _dividir(form: "Formulario") -> bool:
+    """Com PDF e sugestões ligados, o resultado sai em DOIS PDFs: o relatório e as sugestões."""
+    return form.entregar_pdf and form.sugerir_casos
+
+
+def _titulo_do_relatorio(saida: str) -> str:
+    return "Casos de teste" if saida == "casos" else "Relatório de testes"
+
+
+def _secao_entrega(nome_teste: str, saida: str, dividir: bool = False) -> str:
+    titulo = _titulo_do_relatorio(saida)
     sugestao = f"{titulo} - {nome_seguro(nome_teste)}.pdf"
+    if dividir:
+        return (
+            "## Entrega em PDF\n"
+            "Entregue DOIS **arquivos PDF para eu baixar**, cada um com uma capa curta (nome do teste, "
+            "sistema/ambiente, testador e data):\n"
+            f'1. "{sugestao}": o PDF 1, descrito acima.\n'
+            f'2. "{PREFIXO_SUGESTOES} - {nome_seguro(nome_teste)}.pdf": o PDF 2, descrito acima.\n'
+            "- Use tabelas legíveis (com quebra de linha dentro das células) e paginação limpa.\n"
+            '- Se você conseguir, inclua no PDF 1 as imagens das evidências, identificadas como "Evidência N"; '
+            "no PDF 2 não repita as imagens.\n"
+            "- Se você não conseguir gerar arquivos, avise logo no início e entregue o conteúdo completo em "
+            "Markdown, separado nas duas partes, pronto para eu converter em PDF."
+        )
     return (
         "## Entrega em PDF\n"
         f'Entregue o resultado como um **arquivo PDF para eu baixar** (sugestão de nome: "{sugestao}"), '
@@ -127,8 +152,22 @@ def _secao_entrega(nome_teste: str, saida: str) -> str:
     )
 
 
-def _secao_entrega_mcp(teste: PastaTeste, saida: str) -> str:
-    titulo = "Casos de teste" if saida == "casos" else "Relatório de testes"
+def _secao_entrega_mcp(teste: PastaTeste, saida: str, dividir: bool = False) -> str:
+    titulo = _titulo_do_relatorio(saida)
+    if dividir:
+        return (
+            "## Entrega em PDF\n"
+            "Entregue em DOIS PDFs separados, cada um com uma chamada da ferramenta `salvar_relatorio_pdf` com "
+            f'teste="{teste.pasta.name}" e o conteúdo completo em Markdown (títulos, listas e tabelas são '
+            "suportados):\n"
+            f'1. título "{titulo} - {teste.nome_teste}": o PDF 1, descrito acima, com incluir_evidencias=true '
+            "para anexar as imagens ao final.\n"
+            f'2. título "{PREFIXO_SUGESTOES} - {teste.nome_teste}": o PDF 2, descrito acima, com '
+            "incluir_evidencias=false (não repita as imagens).\n"
+            "Os PDFs são gerados no computador do testador, na pasta do teste. Cada um deve fazer sentido sozinho.\n"
+            "- Depois de salvar, responda com o CAMINHO COMPLETO de cada arquivo gerado (campo `caminho_pdf` do "
+            "resultado) e um resumo de 3 a 5 linhas. Não cole os relatórios no chat."
+        )
     return (
         "## Entrega em PDF\n"
         "Quando terminar, chame a ferramenta `salvar_relatorio_pdf` com "
@@ -159,18 +198,35 @@ Em seguida, gere o código dos casos "Sim" e "Parcial", em blocos de código Pyt
 {entrega}"""
 
 
-def _secao_automacao(entregar_pdf: bool, varios: bool) -> str:
+def _secao_automacao(entregar_pdf: bool, varios: bool, dividir: bool = False) -> str:
     arquivos = ("um `test_<nome do teste>.py` por teste, com um único `conftest.py` comum" if varios
                 else "`test_<assunto>.py`")
-    entrega = (
-        "A tabela de avaliação (com a soma) entra no relatório"
-        + (" de cada teste" if varios else "")
-        + " em PDF; o código NÃO vai no PDF: entregue-o no chat, em blocos separados por arquivo."
-        if entregar_pdf else "Entregue a tabela e o código aqui no chat.")
+    if not entregar_pdf:
+        entrega = "Entregue a tabela e o código aqui no chat."
+    else:
+        if dividir:
+            onde = "no PDF de sugestões" + (" de cada teste" if varios else "")
+        else:
+            onde = "no relatório" + (" de cada teste" if varios else "") + " em PDF"
+        entrega = (f"A tabela de avaliação (com a soma) entra {onde}; o código NÃO vai no PDF: entregue-o no "
+                   "chat, em blocos separados por arquivo.")
     return _SECAO_AUTOMACAO.format(arquivos=arquivos, entrega=entrega)
 
 
-def _o_que_produzir(saida: str, sugerir_casos: bool, automacao: str = "") -> str:
+def _o_que_produzir(saida: str, sugerir_casos: bool, automacao: str = "", dividir: bool = False) -> str:
+    if dividir:
+        parte1 = []
+        if saida in ("casos", "ambos"):
+            parte1.append(_SECAO_CASOS)
+        if saida in ("relatorio", "ambos"):
+            parte1.append(_SECAO_RELATORIO)
+        if saida == "ambos":
+            parte1.append("Faça primeiro os casos de teste e depois o relatório, reaproveitando os mesmos IDs.")
+        parte1.append("Neste PDF NÃO coloque os casos sugeridos nem a avaliação de automação: termine com uma "
+                      "linha avisando que as sugestões estão em um PDF à parte.")
+        parte2 = [_SECAO_SUGESTOES] + ([automacao] if automacao else [])
+        return (f"**PDF 1 — {_titulo_do_relatorio(saida)}**\n" + "\n\n".join(parte1)
+                + f"\n\n**PDF 2 — {PREFIXO_SUGESTOES}**\n" + "\n\n".join(parte2))
     secoes = []
     if saida in ("casos", "ambos"):
         secoes.append(_SECAO_CASOS)
@@ -190,13 +246,16 @@ def _o_que_produzir(saida: str, sugerir_casos: bool, automacao: str = "") -> str
 
 def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
     saida = form.saida if form.saida in SAIDAS else "ambos"
-    tarefa = (_TAREFAS[saida] + (" e entregar o resultado em um arquivo PDF" if form.entregar_pdf else "")
+    dividir = _dividir(form)
+    entrega_na_tarefa = (" e entregar o resultado em dois arquivos PDF (o relatório e as sugestões de casos de "
+                         "teste)" if dividir else " e entregar o resultado em um arquivo PDF")
+    tarefa = (_TAREFAS[saida] + (entrega_na_tarefa if form.entregar_pdf else "")
               + (" e avaliar o que é automatizável, gerando a automação em Playwright" if form.automacao else ""))
 
     criterios = form.criterios.strip()
     if not criterios:
         criterios = f"{NAO_INFORMADO} (deduza pelo objetivo e marque como \"deduzido\")"
-    automacao = _secao_automacao(form.entregar_pdf, varios=False) if form.automacao else ""
+    automacao = _secao_automacao(form.entregar_pdf, varios=False, dividir=dividir) if form.automacao else ""
 
     partes = [
         "Você é um analista de qualidade (QA) sênior. Vou te enviar as evidências de um teste "
@@ -212,11 +271,11 @@ def montar_prompt(teste: PastaTeste, form: Formulario) -> str:
         f"## Evidências {'disponíveis' if form.via_mcp else 'anexadas'} ({len(teste.evidencias)})\n"
         f"{_anexo(teste, form.via_mcp)}\n\n{_lista_evidencias(teste)}",
         f"## Regras\n{_REGRAS}",
-        "## O que produzir\n" + _o_que_produzir(saida, form.sugerir_casos, automacao),
+        "## O que produzir\n" + _o_que_produzir(saida, form.sugerir_casos, automacao, dividir),
     ]
     if form.entregar_pdf:
-        partes.append(_secao_entrega_mcp(teste, saida) if form.via_mcp
-                      else _secao_entrega(teste.nome_teste, saida))
+        partes.append(_secao_entrega_mcp(teste, saida, dividir) if form.via_mcp
+                      else _secao_entrega(teste.nome_teste, saida, dividir))
     return "\n\n".join(partes) + "\n"
 
 
@@ -238,8 +297,25 @@ def _linha_do_teste(numero: int, teste: PastaTeste) -> str:
             f"{_ou_nao_informado(teste.testador)} — {_periodo(teste)} — {len(teste.evidencias)} evidências")
 
 
-def _entrega_varios(saida: str) -> str:
-    titulo = "Casos de teste" if saida == "casos" else "Relatório de testes"
+def _entrega_varios(saida: str, dividir: bool = False) -> str:
+    titulo = _titulo_do_relatorio(saida)
+    if dividir:
+        return (
+            "## Entrega em PDF\n"
+            "Ao terminar CADA teste, chame a ferramenta `salvar_relatorio_pdf` DUAS vezes, com "
+            "teste=\"<nome da pasta do teste, como na lista acima>\" e o conteúdo completo em Markdown (títulos, "
+            "listas e tabelas são suportados):\n"
+            f'1. título "{titulo} - <nome do teste>": o PDF 1, descrito acima, com incluir_evidencias=true para '
+            "anexar as imagens ao final.\n"
+            f'2. título "{PREFIXO_SUGESTOES} - <nome do teste>": o PDF 2, descrito acima, com '
+            "incluir_evidencias=false (não repita as imagens).\n"
+            "Os PDFs são gerados no computador do testador, na pasta do próprio teste.\n"
+            "- Salve os dois PDFs de um teste ANTES de começar o próximo. Se não der para concluir todos nesta "
+            "conversa, diga quais ficaram pendentes.\n"
+            "- No fim, responda com uma tabela (Teste | Status sugerido | Caminho completo do PDF do relatório | "
+            "Caminho completo do PDF de sugestões, campo `caminho_pdf` de cada resultado) e um resumo geral de 3 a "
+            "5 linhas. Não cole os relatórios no chat."
+        )
     return (
         "## Entrega em PDF\n"
         "Ao terminar CADA teste, chame a ferramenta `salvar_relatorio_pdf` com teste=\"<nome da pasta do teste, "
@@ -264,13 +340,15 @@ def montar_prompt_varios(testes: list[PastaTeste], form: Formulario) -> str:
     if len(testes) > MAX_TESTES:
         raise ValueError(f"Selecione no máximo {MAX_TESTES} testes por vez (foram {len(testes)}).")
     saida = form.saida if form.saida in SAIDAS else "ambos"
-    tarefa = (_TAREFAS_VARIOS[saida]
-              + (" e salvar cada resultado em PDF na pasta do respectivo teste" if form.entregar_pdf else "")
+    dividir = _dividir(form)
+    salvar = (" e salvar, na pasta de cada teste, dois PDFs (o relatório e as sugestões de casos de teste)"
+              if dividir else " e salvar cada resultado em PDF na pasta do respectivo teste")
+    tarefa = (_TAREFAS_VARIOS[saida] + (salvar if form.entregar_pdf else "")
               + (" e avaliar o que é automatizável, gerando a automação em Playwright" if form.automacao else ""))
     criterios = form.criterios.strip()
     if not criterios:
         criterios = f"{NAO_INFORMADO} (deduza pelo nome do teste e pelas evidências e marque como \"deduzido\")"
-    automacao = _secao_automacao(form.entregar_pdf, varios=True) if form.automacao else ""
+    automacao = _secao_automacao(form.entregar_pdf, varios=True, dividir=dividir) if form.automacao else ""
     total = sum(len(t.evidencias) for t in testes)
     partes = [
         f"Você é um analista de qualidade (QA) sênior. Vou te pedir a análise de {len(testes)} "
@@ -289,8 +367,8 @@ def montar_prompt_varios(testes: list[PastaTeste], form: Formulario) -> str:
         "antes de escrever qualquer coisa sobre ele. A \"Evidência N\" é o item N da lista devolvida por "
         "`obter_teste`. Processe UM teste por vez.",
         f"## Regras\n{_REGRAS_VARIOS}",
-        "## O que produzir (para cada teste)\n" + _o_que_produzir(saida, form.sugerir_casos, automacao),
+        "## O que produzir (para cada teste)\n" + _o_que_produzir(saida, form.sugerir_casos, automacao, dividir),
     ]
     if form.entregar_pdf:
-        partes.append(_entrega_varios(saida))
+        partes.append(_entrega_varios(saida, dividir))
     return "\n\n".join(partes) + "\n"

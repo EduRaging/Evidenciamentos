@@ -55,9 +55,10 @@ O atalho aponta para esta pasta; se o projeto for movido, apague-o e rode o `Ini
 ## Aba "Meus testes"
 
 A segunda aba da janela principal lista **um item por teste** da pasta de evidências, do mais
-recente para o mais antigo, com a data, o nome e um ✓ em **Evidências** (o PDF que o app gera ao
-finalizar) e em **Relatório** (por exemplo, o que o Claude grava pela extensão; "✓ 2" quando há mais
-de um). A lista se atualiza sozinha enquanto a aba está à vista (a cada ~6 s), mantendo a seleção,
+recente para o mais antigo, com a data, o nome e um ✓ em cada tipo de PDF: **Evid.** (o PDF de
+evidências, que o app gera ao finalizar), **Relat.** (o relatório de testes que o Claude grava pela
+extensão) e **Sug.** (as sugestões de casos de teste, também do Claude); "✓ 2" quando há mais de
+um do mesmo tipo. A lista se atualiza sozinha enquanto a aba está à vista (a cada ~6 s), mantendo a seleção,
 então um relatório criado por fora aparece sem fazer nada. O campo de busca ignora acentos e
 combina palavras ("relatorio despesa"), olhando também os nomes dos PDFs.
 
@@ -66,8 +67,8 @@ Só dois botões ficam à vista, e o resto está em **Mais ▾** (ou no clique d
 | Botão / ação | O que faz |
 |---|---|
 | **Enviar ao Claude** | abre a janela do prompt para os testes selecionados (veja abaixo) |
-| **Abrir PDF** | abre o relatório mais recente do teste (ou o de evidências, se não houver relatório); também com dois cliques ou Enter |
-| **Mais ▾ › Evidências / Relatório** | para cada PDF do teste: Abrir, **Copiar arquivo** (cole com Ctrl+V num e-mail, no Teams ou numa pasta), **Salvar cópia…**, **Enviar por e-mail…** e Copiar caminho |
+| **Abrir PDF** | abre o relatório mais recente do teste (ou o de evidências, se não houver relatório; as sugestões nunca abrem por aqui); também com dois cliques ou Enter |
+| **Mais ▾ › Evidências / Relatório / Sugestões** | para cada PDF do teste: Abrir, **Copiar arquivo** (cole com Ctrl+V num e-mail, no Teams ou numa pasta), **Salvar cópia…**, **Enviar por e-mail…** e Copiar caminho |
 | **Mais ▾ › Mostrar a pasta do teste** | abre o Explorador de Arquivos com o PDF selecionado |
 | **Mais ▾ › Arquivar teste…** | move a pasta para `_arquivo`, dentro da pasta de evidências, **sem apagar nada** (para desfazer, mova a pasta de volta). O teste sai da lista e do alcance do Claude (ele ignora pastas que começam com `_`). Funciona com vários testes de uma vez; se um PDF ou imagem estiver aberto em outro programa, o Windows recusa e o app avisa |
 | **Mais ▾ › Abrir a pasta dos arquivados** | abre `_arquivo` |
@@ -77,12 +78,13 @@ colando o PDF já copiado.
 
 **Enviar ao Claude** — com **Ctrl** ou **Shift** o senhor seleciona **vários testes** (até 12 por
 vez). O Claude lê as **imagens** da pasta de cada teste pela extensão (não o conteúdo dos PDFs). O
-prompt pede **um relatório por teste, salvo na pasta do próprio teste** (não um consolidado), um
-teste por vez, e ao final uma tabela com o status sugerido e o caminho de cada PDF. Os detalhes
+prompt pede **um relatório por teste, salvo na pasta do próprio teste** (não um consolidado, e com
+as sugestões num segundo PDF, veja abaixo), um teste por vez, e ao final uma tabela com o status
+sugerido e o caminho de cada PDF. Os detalhes
 (sistema/ambiente, objetivo, critérios e observações) valem para todos os testes selecionados.
 Testes sem imagens são ignorados com aviso. Com vários testes só existe o modo "Claude com a
 extensão" (com anexos não dá para misturar testes), e o Claude pode pedir permissão para gravar
-cada PDF. Se o texto não couber no limite de ~12 mil caracteres do link, o app copia o prompt
+cada PDF (dois por teste, com as sugestões ligadas). Se o texto não couber no limite de ~12 mil caracteres do link, o app copia o prompt
 para colar.
 
 ## A janela "Capturar"
@@ -119,6 +121,12 @@ empresa aprove). Sem chave de API e sem custo, e sem tráfego de rede do app.
    Os casos sugeridos vêm identificados (`CS-01`…), com técnica, prioridade por risco e a evidência
    que motivou a ideia, e **sempre marcados como "não executado"**, separados do que foi testado.
    As técnicas de caixa-branca ficam de fora, porque o testador só vê a tela.
+   **Dois PDFs, cada um com o seu assunto.** Com a entrega em PDF e as sugestões ligadas (o padrão),
+   o resultado sai separado: o **Relatório de testes** (casos executados e relatório de execução,
+   com as imagens anexadas ao final) e as **Sugestões de casos de teste** (os casos sugeridos, as
+   perguntas ao testador e, se a automação estiver marcada, a tabela de avaliação; sem repetir as
+   imagens). Cada um fica na pasta do teste e aparece em coluna própria em **Meus testes**. Sem as
+   sugestões, ou sem a entrega em PDF, volta a ser um documento só.
    A caixa **Avaliar o que é automatizável e gerar código Playwright (Python)** (desmarcada por
    padrão) pede à IA uma **tabela que deixa claro, para cada caso (executados e sugeridos), se dá
    para automatizar** (Sim, Parcial ou Não), por quê, o que falta (URL, login, dados) e a

@@ -19,9 +19,16 @@ SIM, NAO = "✓", "—"
 def _rotulo_do_pdf(teste: TesteRegistrado, pdf: RegistroPdf) -> str:
     if pdf is teste.evidencias:
         return "Evidências"
-    if len(teste.relatorios) == 1:
-        return "Relatório"
-    return f"Relatório de {pdf.momento:%d/%m %H:%M}"
+    grupo = teste.sugestoes if pdf in teste.sugestoes else teste.relatorios
+    nome = "Sugestões" if pdf in teste.sugestoes else "Relatório"
+    return nome if len(grupo) == 1 else f"{nome} de {pdf.momento:%d/%m %H:%M}"
+
+
+def _marca(itens: tuple) -> str:
+    """✓ (ou "✓ 2" quando há mais de um) ou — para a tabela."""
+    if not itens:
+        return NAO
+    return SIM if len(itens) == 1 else f"{SIM} {len(itens)}"
 
 
 class PainelPdfs(ttk.Frame):
@@ -61,15 +68,19 @@ class PainelPdfs(ttk.Frame):
         self.var_status = tk.StringVar()
         ttk.Label(self, textvariable=self.var_status, style="Suave.TLabel", wraplength=480,
                   justify="left").pack(anchor="w", side="bottom", pady=(8, 0))
+        ttk.Label(self, text="Evid. = evidências · Relat. = relatório · Sug. = sugestões de casos"
+                  "\nCtrl ou Shift escolhem vários testes", style="Suave.TLabel", wraplength=490,
+                  justify="left").pack(anchor="w", side="bottom", pady=(6, 0))
 
         corpo = ttk.Frame(self)
         corpo.pack(fill="both", expand=True)
         self._moldura = ttk.Frame(corpo)
-        self.arvore = ttk.Treeview(self._moldura, columns=("data", "teste", "evidencias", "relatorio"),
+        self.arvore = ttk.Treeview(self._moldura, columns=("data", "teste", "evidencias", "relatorio", "sugestoes"),
                                    show="headings", selectmode="extended", style="Tabela.Treeview")
         for coluna, titulo, largura, ancora, estica in (
-                ("data", "Data", 110, "w", False), ("teste", "Teste", 180, "w", True),
-                ("evidencias", "Evidências", 96, "center", False), ("relatorio", "Relatório", 92, "center", False)):
+                ("data", "Data", 58, "w", False), ("teste", "Teste", 200, "w", True),
+                ("evidencias", "Evid.", 56, "center", False), ("relatorio", "Relat.", 58, "center", False),
+                ("sugestoes", "Sug.", 52, "center", False)):
             self.arvore.heading(coluna, text=titulo)
             self.arvore.column(coluna, width=largura, anchor=ancora, stretch=estica)
         barra = ttk.Scrollbar(self._moldura, orient="vertical", command=self.arvore.yview)
@@ -110,9 +121,9 @@ class PainelPdfs(ttk.Frame):
         for i, t in enumerate(visiveis):
             iid = str(i)
             self._por_iid[iid] = t
-            relatorio = (SIM if len(t.relatorios) == 1 else f"{SIM} {len(t.relatorios)}") if t.relatorios else NAO
             self.arvore.insert("", "end", iid=iid, values=(
-                t.momento.strftime("%d/%m %H:%M"), t.teste, SIM if t.evidencias else NAO, relatorio))
+                t.momento.strftime("%d/%m"), t.teste, SIM if t.evidencias else NAO,
+                _marca(t.relatorios), _marca(t.sugestoes)))
             if t.pasta in anteriores:
                 self.arvore.selection_add(iid)
         total, mostrados = len(self._testes), len(visiveis)
@@ -139,7 +150,7 @@ class PainelPdfs(ttk.Frame):
         quantos = f"{total} {'teste' if total == 1 else 'testes'}"
         if mostrados != total:
             quantos = f"{mostrados} de {quantos}"
-        return f"{quantos} em “{base}” · Ctrl ou Shift escolhem vários"
+        return f"{quantos} em “{base}”"
 
     def _selecionados(self) -> list[TesteRegistrado]:
         return [self._por_iid[i] for i in self.arvore.selection() if i in self._por_iid]

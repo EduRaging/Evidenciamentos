@@ -158,6 +158,46 @@ class AgruparPorTeste(unittest.TestCase):
     def test_lista_vazia(self):
         self.assertEqual(registro_pdfs.agrupar_por_teste([]), [])
 
+    def test_pdf_de_sugestoes_e_um_tipo_proprio_e_nao_vira_relatorio(self):
+        criar(self.base / "2026-10-09_1400 - Login", "Sugestões de casos de teste - Login.pdf", mtime=time.time() - 20)
+        criar(self.base / "2026-10-09_1400 - Login", "Sugestoes de casos de teste - Login (2).pdf", mtime=time.time() - 10)
+        login = next(t for t in self.agrupados() if t.teste == "Login")
+        self.assertEqual([s.caminho.name for s in login.sugestoes],
+                         ["Sugestoes de casos de teste - Login (2).pdf", "Sugestões de casos de teste - Login.pdf"])
+        self.assertEqual([r.caminho.name for r in login.relatorios],
+                         ["Relatório de testes - Login (2).pdf", "Relatório de testes - Login.pdf"])
+        self.assertEqual(login.principal.caminho.name, "Relatório de testes - Login (2).pdf")  # nunca as sugestões
+        self.assertEqual(len(login.pdfs), 5)
+        self.assertEqual([p.tipo for p in login.pdfs][:1], ["Evidências"])  # ordem: evidências, relatórios, sugestões
+        self.assertEqual([p.tipo for p in login.pdfs][-2:], ["Sugestões", "Sugestões"])
+
+    def test_teste_so_com_sugestoes_nao_tem_pdf_principal_de_relatorio(self):
+        criar(self.base / "2026-10-11_0700 - So sugestoes", "Sugestões de casos de teste - X.pdf")
+        teste = next(t for t in self.agrupados() if t.teste == "So sugestoes")
+        self.assertIsNone(teste.evidencias)
+        self.assertEqual(teste.relatorios, ())
+        self.assertIsNone(teste.principal)  # as ações de abrir não abrem sugestões por engano
+
+    def test_filtro_acha_pela_palavra_sugestoes(self):
+        criar(self.base / "2026-10-09_1400 - Login", "Sugestões de casos de teste - Login.pdf")
+        testes = self.agrupados()
+        nomes = [t.teste for t in registro_pdfs.filtrar_testes(testes, "sugestoes")]
+        self.assertEqual(nomes, ["Login"])
+
+    def test_classifica_o_tipo_pelo_nome_do_arquivo(self):
+        tipo = registro_pdfs.tipo_do_pdf
+        self.assertEqual(tipo("Evidencias - Login.pdf"), "Evidências")
+        self.assertEqual(tipo("Sugestões de casos de teste - Login.pdf"), "Sugestões")
+        self.assertEqual(tipo("SUGESTOES DE CASOS DE TESTE - login.pdf"), "Sugestões")
+        self.assertEqual(tipo("Relatório de testes - Login.pdf"), "Relatório")
+        self.assertEqual(tipo("Casos de teste - Login.pdf"), "Relatório")
+        self.assertEqual(tipo("qualquer.pdf"), "Relatório")
+        self.assertEqual(tipo("Minhas sugestões.pdf"), "Relatório")  # só vale como PREFIXO do título
+
+    def test_o_prefixo_do_prompt_e_o_que_o_registro_reconhece(self):
+        from capturador.prompt_ia import PREFIXO_SUGESTOES
+        self.assertEqual(registro_pdfs.tipo_do_pdf(f"{PREFIXO_SUGESTOES} - Qualquer teste.pdf"), "Sugestões")
+
     def test_filtro_por_teste_combina_palavras_ignora_acento_e_olha_os_arquivos(self):
         testes = self.agrupados()
         achar = lambda texto: [t.teste for t in registro_pdfs.filtrar_testes(testes, texto)]  # noqa: E731

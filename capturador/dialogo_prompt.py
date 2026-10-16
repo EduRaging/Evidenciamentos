@@ -321,8 +321,9 @@ def abrir_dialogo_prompt(pai: tk.Misc, pasta: Path | Sequence[Path], pasta_base:
         janela.update_idletasks()
         resultado = claude_desktop.abrir_conversa(texto)
         if resultado == claude_desktop.PREENCHIDO:
-            pedidos = (f" Ele pode pedir permissão para gravar cada um dos {len(estado['testes'])} PDFs."
-                       if multiplo and var_pdf.get() else "")
+            gravacoes = len(estado["testes"]) * (2 if var_sugerir.get() else 1)  # relatório + sugestões
+            pedidos = (f" Ele pode pedir permissão para gravar cada um dos {gravacoes} PDFs."
+                       if var_pdf.get() and (multiplo or var_sugerir.get()) else "")
             var_status.set("O Claude abriu com o prompt preenchido. Confira e aperte Enter para enviar: "
                            f"nada sai do computador antes disso.{a_anexar()}{pedidos}")
             return

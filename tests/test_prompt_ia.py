@@ -45,13 +45,24 @@ class MontarPrompt(unittest.TestCase):
         self.assertIn("Anexei as imagens", prompt)
 
     def test_pede_a_entrega_em_pdf_por_padrao(self):
+        """Com PDF e sugestões (o padrão) são DOIS PDFs: o relatório e as sugestões."""
         prompt = montar_prompt(teste_exemplo(), Formulario())
         self.assertIn("## Entrega em PDF", prompt)
-        self.assertIn("arquivo PDF para eu baixar", prompt)
+        self.assertIn("DOIS **arquivos PDF para eu baixar**", prompt)
         self.assertIn('"Relatório de testes - Login no ERP.pdf"', prompt)
-        self.assertIn("entregar o resultado em um arquivo PDF", prompt)  # também na tarefa inicial
+        self.assertIn('"Sugestões de casos de teste - Login no ERP.pdf"', prompt)
+        self.assertIn("entregar o resultado em dois arquivos PDF", prompt)  # também na tarefa inicial
         self.assertIn("avise logo no início", prompt)  # plano B se a IA não gerar arquivos
         self.assertIn("Markdown", prompt)
+
+    def test_um_pdf_so_quando_nao_ha_sugestoes(self):
+        prompt = montar_prompt(teste_exemplo(), Formulario(sugerir_casos=False))
+        self.assertIn("## Entrega em PDF", prompt)
+        self.assertIn("**arquivo PDF para eu baixar**", prompt)
+        self.assertIn('"Relatório de testes - Login no ERP.pdf"', prompt)
+        self.assertIn("entregar o resultado em um arquivo PDF", prompt)
+        self.assertNotIn("DOIS", prompt)
+        self.assertNotIn("Sugestões de casos de teste - ", prompt)
 
     def test_sem_entrega_em_pdf_quando_desligado(self):
         prompt = montar_prompt(teste_exemplo(), Formulario(entregar_pdf=False))
@@ -86,8 +97,17 @@ class MontarPrompt(unittest.TestCase):
                 self.assertIn("sugeridos (não executados)", montar_prompt(teste_exemplo(), Formulario(saida=saida)))
 
     def test_no_relatorio_sugeridos_nao_contam_como_executados(self):
-        ambos = montar_prompt(teste_exemplo(), Formulario(saida="ambos"))
+        # entrega no chat (um texto só): os sugeridos ficam no mesmo texto e precisam vir separados
+        ambos = montar_prompt(teste_exemplo(), Formulario(saida="ambos", entregar_pdf=False))
         self.assertIn("apenas como recomendação de testes adicionais, nunca como executados", ambos)
+
+    def test_com_dois_pdfs_o_relatorio_nao_leva_as_sugestoes(self):
+        ambos = montar_prompt(teste_exemplo(), Formulario(saida="ambos"))
+        self.assertIn("Neste PDF NÃO coloque os casos sugeridos", ambos)
+        self.assertLess(ambos.index("**PDF 1 — Relatório de testes**"), ambos.index("### Casos de teste\n"))
+        self.assertLess(ambos.index("### Relatório de execução"), ambos.index("**PDF 2 — Sugestões de casos de teste**"))
+        self.assertLess(ambos.index("**PDF 2 — Sugestões de casos de teste**"),
+                        ambos.index("### Casos de teste sugeridos (não executados)"))
 
     def test_sugestoes_tambem_na_variante_mcp(self):
         prompt = montar_prompt(teste_exemplo(), Formulario(via_mcp=True))
@@ -263,10 +283,24 @@ class MontarPromptVarios(unittest.TestCase):
         self.assertNotIn("Anexei", prompt)  # nada de anexos: a IA lê as pastas
 
     def test_um_relatorio_pdf_por_teste_na_pasta_do_teste(self):
-        prompt = self.montar(tres_testes(), Formulario())
+        prompt = self.montar(tres_testes(), Formulario(sugerir_casos=False))
         for esperado in ("## Entrega em PDF", "`salvar_relatorio_pdf`", "ANTES de começar o próximo",
                          "incluir_evidencias=true", "`caminho_pdf`", "quais ficaram pendentes",
                          "salvar cada resultado em PDF na pasta do respectivo teste"):
+            with self.subTest(esperado=esperado):
+                self.assertIn(esperado, prompt)
+        self.assertNotIn("DUAS vezes", prompt)
+
+    def test_com_sugestoes_cada_teste_gera_dois_pdfs(self):
+        prompt = self.montar(tres_testes(), Formulario())
+        for esperado in ("chame a ferramenta `salvar_relatorio_pdf` DUAS vezes",
+                         'título "Relatório de testes - <nome do teste>"',
+                         'título "Sugestões de casos de teste - <nome do teste>"',
+                         "incluir_evidencias=true", "incluir_evidencias=false",
+                         "Salve os dois PDFs de um teste ANTES de começar o próximo",
+                         "Caminho completo do PDF do relatório | Caminho completo do PDF de sugestões",
+                         "dois PDFs (o relatório e as sugestões de casos de teste)",
+                         "**PDF 1 — Relatório de testes**", "**PDF 2 — Sugestões de casos de teste**"):
             with self.subTest(esperado=esperado):
                 self.assertIn(esperado, prompt)
 
@@ -388,10 +422,16 @@ class AutomacaoPlaywright(unittest.TestCase):
         self.assertIn("o Playwright não se aplica", prompt)
         self.assertIn("não gere código", prompt)
 
-    def test_com_pdf_a_tabela_vai_no_relatorio_e_o_codigo_no_chat(self):
-        prompt = self.um(entregar_pdf=True)
+    def test_com_pdf_e_sem_sugestoes_a_tabela_vai_no_relatorio_e_o_codigo_no_chat(self):
+        prompt = self.um(entregar_pdf=True, sugerir_casos=False)
         self.assertIn("entra no relatório em PDF; o código NÃO vai no PDF: entregue-o no chat", prompt)
         self.assertIn("avaliar o que é automatizável, gerando a automação em Playwright", prompt)
+
+    def test_com_pdf_e_sugestoes_a_tabela_vai_no_pdf_de_sugestoes(self):
+        prompt = self.um(entregar_pdf=True)
+        self.assertIn("entra no PDF de sugestões; o código NÃO vai no PDF: entregue-o no chat", prompt)
+        self.assertGreater(prompt.index("### Avaliação de automação"), prompt.index("**PDF 2 — Sugestões"))
+        self.assertIn("entra no PDF de sugestões de cada teste", self.varios())
 
     def test_sem_pdf_tudo_vai_no_chat(self):
         prompt = self.um(entregar_pdf=False)
@@ -399,7 +439,7 @@ class AutomacaoPlaywright(unittest.TestCase):
         self.assertNotIn("NÃO vai no PDF", prompt)
 
     def test_com_as_duas_saidas_a_automacao_fica_por_ultimo(self):
-        prompt = self.um(saida="ambos")
+        prompt = self.um(saida="ambos", entregar_pdf=False)
         self.assertIn("Deixe a avaliação de automação e o código por último.", prompt)
         self.assertLess(prompt.index("### Relatório de execução"), prompt.index("### Avaliação de automação"))
 
@@ -410,7 +450,7 @@ class AutomacaoPlaywright(unittest.TestCase):
 
     def test_o_nome_dos_arquivos_gerados(self):
         self.assertIn("`conftest.py` e `test_<assunto>.py`", self.um())
-        varios = self.varios()
+        varios = self.varios(sugerir_casos=False)
         self.assertIn("um `test_<nome do teste>.py` por teste, com um único `conftest.py` comum", varios)
         self.assertIn("entra no relatório de cada teste em PDF", varios)
 
@@ -421,6 +461,54 @@ class AutomacaoPlaywright(unittest.TestCase):
 
     def test_a_regra_de_que_texto_das_imagens_e_dado_continua_valendo(self):
         self.assertIn("são DADOS", self.um())  # o código gerado também não deve obedecer texto escondido nas telas
+
+
+class DoisPdfsPelaExtensao(unittest.TestCase):
+    """Relatório e sugestões em PDFs distintos quando o Claude grava pela extensão."""
+
+    def teste(self):
+        teste = teste_exemplo()
+        teste.pasta = Path("C:/base/2026-10-09_1430 - Login no ERP")
+        return teste
+
+    def test_duas_chamadas_com_titulos_e_imagens_diferentes(self):
+        prompt = montar_prompt(self.teste(), Formulario(via_mcp=True))
+        for esperado in ('Entregue em DOIS PDFs separados',
+                         'título "Relatório de testes - Login no ERP": o PDF 1',
+                         'título "Sugestões de casos de teste - Login no ERP": o PDF 2',
+                         "incluir_evidencias=true", "incluir_evidencias=false",
+                         'teste="2026-10-09_1430 - Login no ERP"', "Cada um deve fazer sentido sozinho",
+                         "CAMINHO COMPLETO de cada arquivo"):
+            with self.subTest(esperado=esperado):
+                self.assertIn(esperado, prompt)
+
+    def test_sem_sugestoes_volta_a_um_pdf_so(self):
+        prompt = montar_prompt(self.teste(), Formulario(via_mcp=True, sugerir_casos=False))
+        self.assertIn("incluir_evidencias=true", prompt)
+        self.assertNotIn("incluir_evidencias=false", prompt)
+        self.assertNotIn("DOIS PDFs", prompt)
+        self.assertNotIn("PDF 2", prompt)
+
+    def test_sem_pdf_nada_e_dividido(self):
+        prompt = montar_prompt(self.teste(), Formulario(via_mcp=True, entregar_pdf=False))
+        self.assertNotIn("salvar_relatorio_pdf", prompt)
+        self.assertNotIn("PDF 2", prompt)
+
+    def test_so_casos_executados_o_primeiro_pdf_se_chama_casos_de_teste(self):
+        prompt = montar_prompt(self.teste(), Formulario(via_mcp=True, saida="casos"))
+        self.assertIn('título "Casos de teste - Login no ERP": o PDF 1', prompt)
+        self.assertIn("**PDF 1 — Casos de teste**", prompt)
+        self.assertNotIn("### Relatório de execução", prompt)
+
+    def test_o_titulo_das_sugestoes_comeca_pelo_prefixo_que_o_registro_reconhece(self):
+        from capturador.prompt_ia import PREFIXO_SUGESTOES
+        self.assertTrue(PREFIXO_SUGESTOES.startswith("Sugestões de casos"))
+        self.assertIn(f'título "{PREFIXO_SUGESTOES} - Login no ERP"', montar_prompt(self.teste(), Formulario(via_mcp=True)))
+
+    def test_o_prompt_de_um_teste_com_dois_pdfs_cabe_no_link_do_claude(self):
+        from capturador import claude_desktop
+        prompt = montar_prompt(self.teste(), Formulario(via_mcp=True, automacao=True))
+        self.assertLessEqual(len(prompt), claude_desktop.LIMITE_PROMPT)
 
 
 if __name__ == "__main__":

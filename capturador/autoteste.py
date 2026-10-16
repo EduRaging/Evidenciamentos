@@ -76,7 +76,7 @@ def _prompt_ia() -> str:
         teste = metadados.ler(pasta)
         prompt = montar_prompt(teste, Formulario(objetivo="Autoteste"))
         for esperado in (teste.pdf, "Evidências anexadas (2)", "Autoteste de acentuação",
-                         "arquivo PDF para eu baixar", "Partição de equivalência",
+                         "arquivos PDF para eu baixar", "Sugestões de casos de teste - ", "Partição de equivalência",
                          "sugeridos (não executados)"):
             if not esperado or esperado not in prompt:
                 raise AssertionError(f"prompt sem {esperado!r}")
