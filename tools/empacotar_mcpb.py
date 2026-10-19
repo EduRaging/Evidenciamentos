@@ -26,7 +26,7 @@ from capturador import __version__  # noqa: E402
 NOME_ARQUIVO = "CapturadorEvidencias.mcpb"
 # só o que o servidor usa (nada de Tk nem de captura de tela)
 MODULOS = ("__init__", "config", "metadados", "prompt_ia", "relatorio_md", "sessao", "pdf_relatorio",
-           "mcp_servidor", "imagens")
+           "mcp_servidor", "imagens", "ciclos", "prompt_ciclo")
 
 PONTO_DE_ENTRADA = '''"""Ponto de entrada da extensão: inicia o servidor MCP do Capturador de Evidências."""
 import os
@@ -58,6 +58,7 @@ FERRAMENTAS = [
     ("obter_teste", "Dados de um teste e a lista numerada de evidências."),
     ("ver_evidencia", "Devolve a imagem de uma evidência para a IA olhar."),
     ("salvar_relatorio_pdf", "Grava o relatório (Markdown) em PDF na pasta do teste, com as evidências."),
+    ("salvar_casos", "Grava o roteiro de testes (os casos) de um ciclo na pasta do ciclo, para o app mostrar."),
 ]
 
 

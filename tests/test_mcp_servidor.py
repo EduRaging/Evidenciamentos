@@ -152,5 +152,141 @@ class FerramentasDoServidor(unittest.TestCase):
         self.assertNotIn("sugeridos (não executados)", prompt)
 
 
+@unittest.skipUnless(TEM_MCP, "pacote mcp não instalado")
+class RoteiroDoCicloPeloServidor(unittest.TestCase):
+    """`salvar_casos` e o prompt `gerar_roteiro`: a IA escreve o roteiro, o servidor confina e valida tudo."""
+
+    CASO = {"id": "CT-01", "titulo": "Login válido", "objetivo": "Entrar no sistema", "tecnica": "Partição de equivalência",
+            "prioridade": "Alta", "passos": [{"acao": "Entrar com dados válidos", "resultado_esperado": "Painel exibido"}]}
+
+    def setUp(self):
+        from capturador import ciclos, mcp_servidor
+        from capturador.sessao import Sessao
+
+        self.srv, self.ciclos = mcp_servidor, ciclos
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+        self._anterior = os.environ.get("CAPTURADOR_PASTA_BASE")
+        os.environ["CAPTURADOR_PASTA_BASE"] = str(self.base)
+        self.addCleanup(lambda: os.environ.pop("CAPTURADOR_PASTA_BASE", None) if self._anterior is None
+                        else os.environ.__setitem__("CAPTURADOR_PASTA_BASE", self._anterior))
+        sessao = Sessao(self.base / "_em_andamento")
+        sessao.adicionar(Image.new("RGB", (300, 200), "navy"), "tela")
+        self.teste = sessao.finalizar("Cadastro de fornecedor", "QA", self.base).name
+        self.ciclo = ciclos.criar_ciclo(self.base, {"nome": "Ciclo - Cadastro", "testes_base": [self.teste]})
+
+    def _erro(self, chamada, *args, **kwargs):
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        with self.assertRaises(ToolError) as contexto:
+            chamada(*args, **kwargs)
+        return str(contexto.exception)
+
+    def _salvar(self, casos=None, **extra):
+        return self.srv.salvar_casos(self.ciclo.pasta.name, [self.CASO] if casos is None else casos, **extra)
+
+    def test_grava_o_roteiro_e_o_app_consegue_ler(self):
+        resposta = self._salvar([self.CASO, {**self.CASO, "id": "CT-02", "prioridade": "baixa"}],
+                                ciclo_sugerido={"objetivo": "Validar o cadastro", "escopo": ["Cadastro"]},
+                                observacoes=["Qual a regra de CNPJ duplicado?"])
+        self.assertEqual((resposta["arquivo"], resposta["casos"], resposta["por_prioridade"]),
+                         ("roteiro-001.json", 2, {"Alta": 1, "Baixa": 1}))
+        self.assertTrue(Path(resposta["caminho"]).samefile(self.ciclo.pasta / "roteiro-001.json"))  # 8.3 x nome longo
+        roteiro = self.ciclos.ler_roteiro_mais_recente(self.ciclo.pasta)
+        self.assertEqual([c.id for c in roteiro.casos], ["CT-01", "CT-02"])
+        self.assertEqual((roteiro.ciclo_sugerido["objetivo"], roteiro.observacoes), ("Validar o cadastro", ["Qual a regra de CNPJ duplicado?"]))
+
+    def test_cada_chamada_cria_o_proximo_arquivo_e_nunca_sobrescreve(self):
+        primeiro = self._salvar()["arquivo"]
+        segundo = self._salvar()["arquivo"]
+        self.assertEqual((primeiro, segundo), ("roteiro-001.json", "roteiro-002.json"))
+        self.assertEqual(self.ciclos.contar_roteiros(self.ciclo.pasta), 2)
+
+    def test_roteiro_invalido_volta_com_a_mensagem_para_a_ia_se_corrigir(self):
+        mensagem = self._erro(self._salvar, [{**self.CASO, "prioridade": "urgentíssima"}, {**self.CASO, "id": "x"}])
+        self.assertIn("casos[0].prioridade", mensagem)
+        self.assertIn("casos[1].id", mensagem)
+        self.assertEqual(self.ciclos.contar_roteiros(self.ciclo.pasta), 0)  # nada foi gravado
+
+    def test_ciclo_sugerido_e_observacoes_invalidos_tambem_sao_recusados_sem_gravar(self):
+        self._erro(self._salvar, ciclo_sugerido="texto solto")
+        self._erro(self._salvar, observacoes=["x"] * 50)
+        self.assertEqual(self.ciclos.contar_roteiros(self.ciclo.pasta), 0)
+
+    def test_so_aceita_o_nome_de_um_ciclo_existente_dentro_de__ciclos(self):
+        for nome in ("..", "a/b", "..\\x", "C:\\Windows", "_oculta", "nao existe", "", self.teste):
+            with self.subTest(nome=nome):
+                self._erro(self.srv.salvar_casos, nome, [self.CASO])
+        antes = sorted(p.name for p in self.base.rglob("*"))
+        self._erro(self.srv.salvar_casos, "../" + self.teste, [self.CASO])
+        self.assertEqual(sorted(p.name for p in self.base.rglob("*")), antes)
+
+    def test_pasta_em__ciclos_sem_ciclo_json_nao_recebe_nada(self):
+        intrusa = self.base / "_ciclos" / "2026-10-19_1000 - Intrusa"
+        intrusa.mkdir()
+        self._erro(self.srv.salvar_casos, intrusa.name, [self.CASO])
+        self.assertEqual(list(intrusa.iterdir()), [])
+
+    def test_ciclo_json_adulterado_nao_recebe_roteiro(self):
+        (self.ciclo.pasta / "ciclo.json").write_text("{adulterado", encoding="utf-8")
+        self._erro(self._salvar)
+
+    def test_limite_de_roteiros_por_ciclo(self):
+        for n in range(1, self.srv.MAX_ROTEIROS_POR_CICLO + 1):
+            (self.ciclo.pasta / f"roteiro-{n:03d}.json").write_text("{}", encoding="utf-8")
+        self.assertIn(str(self.srv.MAX_ROTEIROS_POR_CICLO), self._erro(self._salvar))
+
+    def test_gravacoes_simultaneas_geram_arquivos_distintos(self):
+        import threading
+
+        resultados, erros = [], []
+
+        def gravar():
+            try:
+                resultados.append(self._salvar()["arquivo"])
+            except Exception as exc:  # noqa: BLE001
+                erros.append(exc)
+
+        threads = [threading.Thread(target=gravar) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(erros, [])
+        self.assertEqual(len(set(resultados)), 6)
+        self.assertEqual(self.ciclos.contar_roteiros(self.ciclo.pasta), 6)
+
+    def test_ferramenta_exposta_como_gravacao_nao_destrutiva(self):
+        import asyncio
+
+        ferramentas = {t.name: t for t in asyncio.run(self.srv.mcp.list_tools())}
+        self.assertIn("salvar_casos", ferramentas)
+        anotacoes = ferramentas["salvar_casos"].annotations
+        self.assertFalse(anotacoes.read_only_hint)
+        self.assertFalse(anotacoes.destructive_hint)
+        self.assertFalse(anotacoes.open_world_hint)
+        self.assertTrue(ferramentas["listar_testes"].annotations.read_only_hint)  # as leituras seguem somente leitura
+
+    def test_prompt_gerar_roteiro_traz_o_ciclo_as_telas_e_a_ferramenta(self):
+        prompt = self.srv.gerar_roteiro(self.ciclo.pasta.name)
+        for esperado in ("Ciclo - Cadastro", f'pasta "{self.teste}"', "`salvar_casos`", f'ciclo="{self.ciclo.pasta.name}"',
+                         "`ver_evidencia`", "ISTQB CTFL 4.0"):
+            with self.subTest(esperado=esperado):
+                self.assertIn(esperado, prompt)
+
+    def test_prompt_avisa_de_teste_de_referencia_que_sumiu(self):
+        import shutil
+
+        shutil.rmtree(self.base / self.teste)
+        prompt = self.srv.gerar_roteiro(self.ciclo.pasta.name)
+        self.assertIn("não foram encontrados", prompt)
+        self.assertIn(self.teste, prompt)
+
+    def test_prompt_recusa_ciclo_inexistente(self):
+        with self.assertRaises(ValueError):
+            self.srv.gerar_roteiro("nao existe")
+
+
 if __name__ == "__main__":
     unittest.main()

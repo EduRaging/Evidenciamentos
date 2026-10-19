@@ -31,6 +31,52 @@ class ClaudeFalso(unittest.TestCase):
         return ex.avisos(self.teste, self.claude)
 
 
+class FerramentaExigida(ClaudeFalso):
+    """A janela de ciclos precisa da ferramenta `salvar_casos`, que extensões antigas não têm."""
+
+    def com_ferramentas(self, nomes):
+        self.instalar()
+        (self.claude / "Claude Extensions" / ex.ID_EXTENSAO / "manifest.json").write_text(
+            json.dumps({"tools": [{"name": n} for n in nomes]}), encoding="utf-8")
+
+    def avisos(self, ferramenta="salvar_casos"):
+        return ex.avisos(self.teste, self.claude, exigir_ferramenta=ferramenta)
+
+    def test_extensao_antiga_sem_a_ferramenta_avisa_para_reinstalar(self):
+        self.com_ferramentas(["listar_testes", "obter_teste", "ver_evidencia", "salvar_relatorio_pdf"])
+        resultado = self.avisos()
+        self.assertEqual(len(resultado), 1)
+        self.assertIn("salvar_casos", resultado[0])
+        self.assertIn("reinstale", resultado[0])
+
+    def test_extensao_nova_nao_avisa(self):
+        self.com_ferramentas(["listar_testes", "salvar_casos"])
+        self.assertEqual(self.avisos(), [])
+
+    def test_sem_exigir_ferramenta_nao_olha_o_manifesto(self):
+        self.com_ferramentas([])
+        self.assertEqual(ex.avisos(self.teste, self.claude), [])
+
+    def test_manifesto_em_formato_desconhecido_significa_nao_sei(self):
+        self.instalar()
+        manifesto = self.claude / "Claude Extensions" / ex.ID_EXTENSAO / "manifest.json"
+        for bruto in ("{}", '{"tools": 5}', '{"tools": ["texto"]}', "não é json", "[]"):
+            with self.subTest(bruto=bruto):
+                manifesto.write_text(bruto, encoding="utf-8")
+                self.assertEqual(self.avisos(), [])
+
+    def test_avisa_da_ferramenta_e_do_resto_juntos(self):
+        self.com_ferramentas(["listar_testes"])
+        (self.claude / "Claude Extensions Settings" / f"{ex.ID_EXTENSAO}.json").write_text(
+            json.dumps({"isEnabled": False, "userConfig": {"pasta_base": str(self.base)}}), encoding="utf-8")
+        self.assertEqual(len(self.avisos()), 2)
+
+    def test_ferramenta_ausente_sem_arquivo_de_ajustes_ainda_avisa(self):
+        self.com_ferramentas(["listar_testes"])
+        (self.claude / "Claude Extensions Settings" / f"{ex.ID_EXTENSAO}.json").unlink()
+        self.assertEqual(len(self.avisos()), 1)
+
+
 class AvisosDaExtensao(ClaudeFalso):
     def test_tudo_certo_nao_avisa(self):
         self.instalar()

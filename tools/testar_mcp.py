@@ -33,6 +33,7 @@ sys.path.insert(0, str(RAIZ))
 
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
+from capturador import ciclos  # noqa: E402
 from capturador.sessao import Sessao  # noqa: E402
 
 
@@ -142,14 +143,15 @@ async def _autoteste(base: Path, nome: str, bundle: Path | None = None) -> list[
             init = await mcp.initialize()
             confere("handshake: o servidor se apresenta", init.server_info.name == "capturador-evidencias")
             ferramentas = {t.name: t for t in (await mcp.list_tools()).tools}
-            confere("4 ferramentas expostas", sorted(ferramentas) == [
-                "listar_testes", "obter_teste", "salvar_relatorio_pdf", "ver_evidencia"])
-            confere("leituras são somente leitura; a escrita não é destrutiva",
+            confere("5 ferramentas expostas", sorted(ferramentas) == [
+                "listar_testes", "obter_teste", "salvar_casos", "salvar_relatorio_pdf", "ver_evidencia"])
+            confere("leituras são somente leitura; as duas escritas não são destrutivas",
                     all(ferramentas[n].annotations.read_only_hint for n in
                         ("listar_testes", "obter_teste", "ver_evidencia"))
-                    and ferramentas["salvar_relatorio_pdf"].annotations.destructive_hint is False)
-            confere("prompt analisar_teste exposto",
-                    [p.name for p in (await mcp.list_prompts()).prompts] == ["analisar_teste"])
+                    and all(ferramentas[n].annotations.destructive_hint is False and not ferramentas[n].annotations.read_only_hint
+                            for n in ("salvar_relatorio_pdf", "salvar_casos")))
+            confere("prompts analisar_teste e gerar_roteiro expostos",
+                    sorted(p.name for p in (await mcp.list_prompts()).prompts) == ["analisar_teste", "gerar_roteiro"])
 
             r = await mcp.call_tool("listar_testes", {})
             confere("listar_testes acha o teste de exemplo", not r.is_error and nome in str(r.content))
@@ -176,6 +178,27 @@ async def _autoteste(base: Path, nome: str, bundle: Path | None = None) -> list[
             texto = p.messages[0].content.text
             confere("o prompt traz instruções e sugestões ISTQB/BSTQB",
                     "`ver_evidencia`" in texto and "Partição de equivalência" in texto)
+
+            # --- o ciclo de testes: o roteiro é gravado pela IA e lido pelo app
+            ciclo = ciclos.criar_ciclo(base, {"nome": "Ciclo de autoteste", "testes_base": [nome]})
+            p = await mcp.get_prompt("gerar_roteiro", {"ciclo": ciclo.pasta.name})
+            texto = p.messages[0].content.text
+            confere("o prompt gerar_roteiro traz o ciclo, as telas e a ferramenta salvar_casos",
+                    "`salvar_casos`" in texto and nome in texto and ciclo.pasta.name in texto)
+            caso = {"id": "CT-01", "titulo": "Cadastrar cliente PJ", "objetivo": "Confirmar o cadastro",
+                    "tecnica": "Partição de equivalência", "prioridade": "Alta",
+                    "passos": [{"acao": "Preencher e salvar", "resultado_esperado": "Cliente listado"}]}
+            r = await mcp.call_tool("salvar_casos", {"ciclo": ciclo.pasta.name, "casos": [caso],
+                                                     "ciclo_sugerido": {"objetivo": "Validar o cadastro"}})
+            roteiro = ciclos.ler_roteiro_mais_recente(ciclo.pasta)
+            confere("salvar_casos grava o roteiro e o app consegue lê-lo",
+                    not r.is_error and roteiro is not None and [c.id for c in roteiro.casos] == ["CT-01"]
+                    and roteiro.ciclo_sugerido.get("objetivo") == "Validar o cadastro")
+            r = await mcp.call_tool("salvar_casos", {"ciclo": ciclo.pasta.name, "casos": [{**caso, "prioridade": "x"}]})
+            confere("um roteiro inválido é recusado com a mensagem para a IA corrigir",
+                    r.is_error is True and "casos[0].prioridade" in (r.content[0].text if r.content else ""))
+            r = await mcp.call_tool("salvar_casos", {"ciclo": "..", "casos": [caso]})
+            confere("salvar_casos recusa sair da pasta dos ciclos", r.is_error is True)
 
     # --- o incidente: sem pasta configurada o servidor NÃO pode cair numa pasta padrão
     async with stdio_client(parametros("nenhuma")) as (leitura, escrita):

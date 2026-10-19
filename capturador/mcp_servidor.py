@@ -21,9 +21,10 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from PIL import Image as PILImage
 
-from . import metadados
+from . import ciclos, metadados
 from .imagens import abrir_png
 from .metadados import PastaTeste
+from .prompt_ciclo import montar_prompt_roteiro
 from .prompt_ia import SAIDAS, Formulario, montar_prompt
 from .relatorio_md import EvidenciaPdf, gerar_pdf_de_markdown
 from .sessao import nome_seguro
@@ -32,6 +33,7 @@ LADO_MAXIMO = 1568  # px; acima disso a IA reduz a imagem de qualquer jeito e o 
 MAX_MARKDOWN = 200_000
 MAX_TITULO = 150
 MAX_PDFS_POR_TESTE = 100  # teto de gravação: títulos diferentes criam arquivos novos sem limite
+MAX_ROTEIROS_POR_CICLO = 30  # idem para os roteiros (cada geração nova cria o próximo número)
 _trava_gravacao = threading.Lock()  # o SDK roda as ferramentas em threads; a gravação é uma por vez
 AVISO_IA = "Rascunho gerado por IA a partir das evidências. Revisão do testador necessária."
 
@@ -39,7 +41,9 @@ INSTRUCOES = (
     "Evidências de testes manuais capturadas pelo Capturador de Evidências. Fluxo: `listar_testes` "
     "para achar o teste; `obter_teste` para ver as evidências; `ver_evidencia` para olhar cada imagem; "
     "`salvar_relatorio_pdf` para gravar o relatório (Markdown) em PDF na pasta do teste. O prompt "
-    "`analisar_teste` já traz as instruções completas. Baseie-se só no que as imagens mostram. "
+    "`analisar_teste` já traz as instruções completas. Para montar o roteiro de testes de um ciclo, o prompt "
+    "`gerar_roteiro` traz as instruções e a ferramenta `salvar_casos` grava os casos. "
+    "Baseie-se só no que as imagens mostram. "
     "Sempre diga ao usuário QUAL pasta está lendo (campo `pasta_base` de `listar_testes`) e, ao salvar, "
     "o CAMINHO COMPLETO do arquivo gerado."
 )
@@ -252,6 +256,49 @@ def salvar_relatorio_pdf(teste: str, titulo: str, conteudo_markdown: str,
     return {"teste": dados.pasta.name, "pdf": pdf.name, "markdown": markdown.name, "paginas": paginas,
             "evidencias_anexadas": len(evidencias), "pasta": str(dados.pasta),
             "caminho_pdf": str(pdf), "caminho_markdown": str(markdown)}
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                      idempotentHint=False, openWorldHint=False))
+@_erros_previstos
+def salvar_casos(ciclo: str, casos: list[dict[str, Any]], ciclo_sugerido: dict[str, Any] | None = None,
+                 observacoes: list[str] | None = None) -> dict[str, Any]:
+    """Grava o roteiro de testes (os casos) de um ciclo, para o app mostrá-lo ao testador.
+
+    `ciclo` é o nome da pasta do ciclo. Cada caso: id (CT-01), titulo, objetivo, tecnica, prioridade
+    (Alta, Média ou Baixa), passos [{acao, resultado_esperado}] e, opcionalmente, tipo, pre_condicoes,
+    dados_de_teste, pos_condicoes, rastreio, evidencias_base [{teste, numero}] e a_confirmar.
+    `ciclo_sugerido` propõe objetivo, escopo, riscos e critérios de entrada e saída. Tudo é validado e,
+    se algo não servir, a mensagem diz o que corrigir. Nunca sobrescreve: cada chamada cria o próximo
+    arquivo roteiro-NNN.json na pasta do ciclo.
+    """
+    pasta = ciclos.resolver_ciclo(_base(), ciclo)
+    ciclos.ler_ciclo(pasta)  # só se grava em pasta que seja mesmo um ciclo criado pelo app
+    validados = ciclos.validar_casos(casos)
+    with _trava_gravacao:
+        if ciclos.contar_roteiros(pasta) >= MAX_ROTEIROS_POR_CICLO:
+            raise ValueError(f"Este ciclo já tem {MAX_ROTEIROS_POR_CICLO} roteiros; apague os que não servem mais.")
+        arquivo = ciclos.gravar_roteiro(pasta, validados, observacoes, ciclo_sugerido=ciclo_sugerido)
+    por_prioridade: dict[str, int] = {}
+    for c in validados:
+        por_prioridade[c.prioridade] = por_prioridade.get(c.prioridade, 0) + 1
+    # a pasta e o caminho vão para a IA de propósito, como no relatório: é a pasta que o usuário configurou
+    return {"ciclo": pasta.name, "arquivo": arquivo.name, "casos": len(validados), "por_prioridade": por_prioridade,
+            "pasta": str(pasta), "caminho": str(arquivo)}
+
+
+@mcp.prompt(title="Gerar o roteiro de testes de um ciclo")
+def gerar_roteiro(ciclo: str) -> str:
+    """Instruções completas para montar o roteiro de testes de um ciclo a partir das telas de referência."""
+    pasta = ciclos.resolver_ciclo(_base(), ciclo)
+    dados = ciclos.ler_ciclo(pasta)
+    testes, ausentes = [], []
+    for nome in dados.testes_base:
+        try:
+            testes.append(_resolver_teste(nome))
+        except ValueError:
+            ausentes.append(nome)
+    return montar_prompt_roteiro(dados, testes, ausentes)
 
 
 @mcp.prompt(title="Analisar teste e gerar o relatório em PDF")
