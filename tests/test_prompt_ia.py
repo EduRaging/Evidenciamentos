@@ -466,13 +466,13 @@ class AutomacaoPlaywright(unittest.TestCase):
 class DoisPdfsPelaExtensao(unittest.TestCase):
     """Relatório e sugestões em PDFs distintos quando o Claude grava pela extensão."""
 
-    def teste(self):
+    def criar_teste(self):
         teste = teste_exemplo()
         teste.pasta = Path("C:/base/2026-10-09_1430 - Login no ERP")
         return teste
 
     def test_duas_chamadas_com_titulos_e_imagens_diferentes(self):
-        prompt = montar_prompt(self.teste(), Formulario(via_mcp=True))
+        prompt = montar_prompt(self.criar_teste(), Formulario(via_mcp=True))
         for esperado in ('Entregue em DOIS PDFs separados',
                          'título "Relatório de testes - Login no ERP": o PDF 1',
                          'título "Sugestões de casos de teste - Login no ERP": o PDF 2',
@@ -483,19 +483,19 @@ class DoisPdfsPelaExtensao(unittest.TestCase):
                 self.assertIn(esperado, prompt)
 
     def test_sem_sugestoes_volta_a_um_pdf_so(self):
-        prompt = montar_prompt(self.teste(), Formulario(via_mcp=True, sugerir_casos=False))
+        prompt = montar_prompt(self.criar_teste(), Formulario(via_mcp=True, sugerir_casos=False))
         self.assertIn("incluir_evidencias=true", prompt)
         self.assertNotIn("incluir_evidencias=false", prompt)
         self.assertNotIn("DOIS PDFs", prompt)
         self.assertNotIn("PDF 2", prompt)
 
     def test_sem_pdf_nada_e_dividido(self):
-        prompt = montar_prompt(self.teste(), Formulario(via_mcp=True, entregar_pdf=False))
+        prompt = montar_prompt(self.criar_teste(), Formulario(via_mcp=True, entregar_pdf=False))
         self.assertNotIn("salvar_relatorio_pdf", prompt)
         self.assertNotIn("PDF 2", prompt)
 
     def test_so_casos_executados_o_primeiro_pdf_se_chama_casos_de_teste(self):
-        prompt = montar_prompt(self.teste(), Formulario(via_mcp=True, saida="casos"))
+        prompt = montar_prompt(self.criar_teste(), Formulario(via_mcp=True, saida="casos"))
         self.assertIn('título "Casos de teste - Login no ERP": o PDF 1', prompt)
         self.assertIn("**PDF 1 — Casos de teste**", prompt)
         self.assertNotIn("### Relatório de execução", prompt)
@@ -503,11 +503,11 @@ class DoisPdfsPelaExtensao(unittest.TestCase):
     def test_o_titulo_das_sugestoes_comeca_pelo_prefixo_que_o_registro_reconhece(self):
         from capturador.prompt_ia import PREFIXO_SUGESTOES
         self.assertTrue(PREFIXO_SUGESTOES.startswith("Sugestões de casos"))
-        self.assertIn(f'título "{PREFIXO_SUGESTOES} - Login no ERP"', montar_prompt(self.teste(), Formulario(via_mcp=True)))
+        self.assertIn(f'título "{PREFIXO_SUGESTOES} - Login no ERP"', montar_prompt(self.criar_teste(), Formulario(via_mcp=True)))
 
     def test_o_prompt_de_um_teste_com_dois_pdfs_cabe_no_link_do_claude(self):
         from capturador import claude_desktop
-        prompt = montar_prompt(self.teste(), Formulario(via_mcp=True, automacao=True))
+        prompt = montar_prompt(self.criar_teste(), Formulario(via_mcp=True, automacao=True))
         self.assertLessEqual(len(prompt), claude_desktop.LIMITE_PROMPT)
 
 

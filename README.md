@@ -100,16 +100,32 @@ secundárias. Ao finalizar, a janela de conclusão oferece **Criar ciclo de test
 ## Ciclos de teste (o roteirizador)
 
 Um **ciclo** é uma *rodada de testes*. O senhor **só fornece as telas**, capturadas e finalizadas do
-jeito de sempre; daí em diante é automático, até a hora de executar e evidenciar o ciclo de novo.
+jeito de sempre; daí em diante é **automático**, até a hora de executar e evidenciar o ciclo de novo.
 
 1. Ao finalizar um teste, clique em **Criar ciclo de testes** (ou, em **Meus testes**, selecione
    o(s) teste(s) e use **Mais ▾ › Criar ciclo de testes**). O ciclo nasce sem formulário: o nome
    vem do teste ("Ciclo - Login no ERP") e as telas viram as **telas de referência**.
-2. O app abre o **Claude** com o pedido do roteiro já preenchido (o senhor aperta Enter). Ele olha as
-   telas pela extensão e grava o **roteiro de testes**, sem o senhor escrever nada.
-3. Na aba **Ciclos** o roteiro aparece sozinho ("5 casos"); **Ver roteiro** abre a janela com os
+2. O **app chama o Claude sozinho** (sem abrir o Claude desktop, sem prompt, sem Enter). Na aba
+   **Ciclos** o ciclo mostra "gerando…" enquanto o Claude trabalha (alguns minutos); o app continua
+   livre para capturar, e dá para cancelar em **Mais ▾**.
+3. Quando termina, o roteiro aparece ("5 casos") com um aviso; **Ver roteiro** abre a janela com os
    casos e a definição do ciclo, e **Salvar o roteiro em PDF** gera um documento formal (feito pelo
    app, não pela IA) na pasta do ciclo.
+
+**Como o app chama o Claude.** Ele roda o **Claude Code que já vem com o Claude desktop** (em
+`%APPDATA%\Claude\claude-code`), em modo **não interativo e restrito**: só a ferramenta `Read`, sem
+MCP, sem skills, sem ler as suas configurações, sem sessão salva, com tudo o que pediria permissão
+negado e com teto de gasto. Ele roda numa **pasta temporária** que tem só **cópias reduzidas das telas**
+(no máximo 40; PNGs de verdade, nada mais do teste), apagada ao fim. A IA devolve **só um JSON**; **o
+app valida e grava** o roteiro (a IA não escreve arquivo nenhum). Não usa chave de API: usa a **conta do
+Claude Code** do senhor, que precisa estar conectada **uma vez** (`claude auth login`; o app oferece
+abrir o login na primeira vez).
+
+**Autorização.** As telas **saem do computador** nesse momento. Na primeira geração o app pergunta se
+pode enviá-las (e lembra de dados sensíveis e da política da empresa); a resposta fica salva e dá para
+**revogá-la** em **Mais ▾**. Sem a autorização, sem o Claude Code ou sem o login, nada é enviado e o
+app oferece o plano B: **Pedir o roteiro no Claude desktop (manual)**, que abre o pedido preenchido e
+exige o Enter do senhor (e a extensão, veja abaixo).
 
 **O que o Claude entrega**, no padrão do CTFL 4.0 (o programa do BSTQB):
 - **Casos de teste** atômicos, cada um com ID (CT-01…), título, objetivo, **técnica** (partição de
@@ -131,13 +147,20 @@ fumaça), sistema, versão, ambiente, testador, período, objetivo, escopo e cri
 `roteiro-001.json` por geração (gerar de novo cria o 002; nada é sobrescrito). A pasta começa com `_`
 de propósito: o registro de testes e a leitura do Claude a ignoram.
 
-**Segurança.** A extensão ganhou a ferramenta `salvar_casos`, que só grava `roteiro-NNN.json` dentro
-de `_ciclos\<ciclo>`, só em pasta que tenha um `ciclo.json` válido, com criação exclusiva, trava,
-teto de 30 roteiros e **validação estrita** (tipos, tamanhos, IDs únicos, textos de uma linha sem
-caracteres de controle ou de direção, nomes de pasta simples). O app **valida tudo de novo ao ler**:
-um roteiro adulterado é pulado. O roteiro é um **rascunho da IA**: revise antes de executar. Exige
-**reinstalar a extensão** (`dist\CapturadorEvidencias.mcpb`); se a instalada for antiga, o app avisa
-antes de pedir o roteiro.
+**Segurança.** O roteiro é um **rascunho da IA**: revise antes de executar. O app **valida tudo ao
+gravar e de novo ao ler** (tipos, tamanhos, IDs únicos, textos de uma linha sem caracteres de controle
+ou de direção, nomes de pasta simples); um roteiro adulterado é pulado, e nada inválido é gravado.
+Como a IA só tem `Read` numa pasta com imagens, texto escondido numa tela no máximo distorce o roteiro:
+não alcança arquivos, comandos nem a rede. **Atenção à rede:** neste fluxo o app **inicia um processo
+(o Claude Code) que se conecta à Anthropic**; a medição de "zero conexões externas" abaixo vale para o
+app e a extensão sem esse fluxo, e a TI precisa saber disso. O modo restrito foi aceito pelo Claude Code
+instalado (versão 2.1.299), mas o caminho de sucesso real depende do login do senhor e **ainda não foi
+exercitado com o Claude de verdade**.
+
+**Plano B (manual) e a extensão.** Pelo Claude desktop, a extensão ganhou a ferramenta `salvar_casos`,
+que só grava `roteiro-NNN.json` dentro de `_ciclos\<ciclo>`, só em pasta com `ciclo.json` válido, com
+criação exclusiva, trava, teto de 30 roteiros e a mesma validação estrita. Exige **reinstalar a
+extensão** (`dist\CapturadorEvidencias.mcpb`); se a instalada for antiga, o app avisa antes de pedir.
 
 **Próximas etapas (ainda não feitas):** execução guiada do ciclo (passo a passo, com a evidência
 ligada ao passo e o resultado de cada caso), relatório de execução do ciclo com a checagem dos
@@ -146,7 +169,7 @@ critérios de saída e as métricas do CTFL.
 
 O app não se conecta a nenhuma IA: ele monta um **prompt pronto** para o senhor enviar ao Claude
 desktop (um clique abre a conversa com o texto preenchido) ou colar na IA que preferir (e que a
-empresa aprove). Sem chave de API e sem custo, e sem tráfego de rede do app.
+empresa aprove). Sem chave de API e sem custo, e sem tráfego de rede do app (a exceção é a geração automática do roteiro dos ciclos, que usa o Claude Code; veja a seção Ciclos).
 
 1. Ao finalizar um teste, clique em **Enviar ao Claude…** (ou, na aba **Meus testes**, selecione o(s)
    teste(s) e use **Enviar ao Claude**; na janela do prompt, **Trocar…** escolhe outro teste).

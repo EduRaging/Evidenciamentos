@@ -15,7 +15,7 @@ from pathlib import Path
 from PIL import Image, ImageTk
 
 from . import (__version__, arquivamento, atalhos, captura, ciclos, claude_desktop, dialogo_prompt, estilo,
-               fluxo_ciclo, metadados, miniaturas, painel_ciclos, painel_pdfs, recursos, registro_pdfs, roteiro_md,
+               fluxo_ciclo, ia_local, metadados, miniaturas, painel_ciclos, painel_pdfs, recursos, registro_pdfs, roteiro_md,
                visualizador_roteiro, winutil)
 from .pdf_relatorio import _registrar_fontes
 from .prompt_ia import Formulario, montar_prompt
@@ -151,6 +151,31 @@ def _ciclo_de_testes() -> str:
     return f"ciclo só com as telas, roteiro de {len(roteiro.casos)} caso, pedido de {len(pedido)} caracteres e PDF"
 
 
+def _geracao_automatica() -> str:
+    """O que o app usa para chamar o Claude Code sozinho (sem chamar o Claude): comando restrito, telas e resposta."""
+    comando = ia_local.montar_comando(Path("claude.exe"))
+    for exigido in ("--restricted", "--strict-mcp-config", "--no-session-persistence", "--json-schema"):
+        if exigido not in comando:
+            raise AssertionError(f"comando sem {exigido}")
+    if "Bash" in " ".join(comando) or "--dangerously-skip-permissions" in comando:
+        raise AssertionError("comando com permissão demais")
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = _finalizar_exemplo(Path(tmp))
+        testes, _ = fluxo_ciclo.testes_de_referencia(
+            fluxo_ciclo.criar_a_partir_de_testes(pasta.parent, [pasta])[0], pasta.parent)
+        trabalho = Path(tmp) / "trabalho"
+        trabalho.mkdir()
+        mapa = ia_local.preparar_pasta_de_trabalho(testes, trabalho)
+        copiadas = sorted(p.name for p in trabalho.rglob("*") if p.is_file())
+        if not mapa or copiadas != [f"{n:02d}.png" for n, _ in mapa["t1"][1]]:
+            raise AssertionError(f"pasta de trabalho inesperada: {copiadas}")
+    resposta = ia_local.extrair_resposta('{"is_error": false, "structured_output": {"casos": []}}')
+    if "casos" not in resposta:
+        raise AssertionError("resposta estruturada não lida")
+    achado = ia_local.localizar_claude()
+    return f"comando restrito, telas reduzidas e resposta; Claude Code {"encontrado" if achado else "não encontrado (cai no pedido manual)"}"
+
+
 def _registro_de_pdfs() -> str:
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp) / "base"
@@ -189,6 +214,7 @@ VERIFICACOES = (
     ("registro de PDFs", _registro_de_pdfs),
     ("miniaturas e arquivamento", _miniaturas_e_arquivamento),
     ("ciclo de testes e roteiro", _ciclo_de_testes),
+    ("geração automática do roteiro", _geracao_automatica),
 )
 
 

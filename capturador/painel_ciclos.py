@@ -30,10 +30,14 @@ def _assinatura_dos_roteiros(ciclo: Ciclo) -> tuple:
 class PainelCiclos(ttk.Frame):
     def __init__(self, pai: tk.Misc, obter_base: Callable[[], str], ao_novo: Callable[[], None],
                  ao_gerar: Callable[[Ciclo], None], ao_ver: Callable[[Ciclo], None],
-                 ao_salvar_pdf: Callable[[Ciclo], None]) -> None:
+                 ao_salvar_pdf: Callable[[Ciclo], None], ao_gerar_manual: Callable[[Ciclo], None] | None = None,
+                 ao_cancelar: Callable[[Ciclo], None] | None = None,
+                 ao_revogar: Callable[[], None] | None = None) -> None:
         super().__init__(pai, padding=(18, 16, 18, 12))
         self._obter_base = obter_base
         self._ao_novo, self._ao_gerar, self._ao_ver, self._ao_salvar_pdf = ao_novo, ao_gerar, ao_ver, ao_salvar_pdf
+        self._ao_gerar_manual, self._ao_cancelar, self._ao_revogar = ao_gerar_manual, ao_cancelar, ao_revogar
+        self._gerando: set[Path] = set()  # ciclos cujo roteiro o Claude está montando agora
         self._ciclos: list[Ciclo] = []
         self._por_iid: dict[str, Ciclo] = {}
         self._situacao: dict[Path, tuple[tuple, int]] = {}  # pasta -> (assinatura dos roteiros, nº de casos)
@@ -90,6 +94,12 @@ class PainelCiclos(ttk.Frame):
         if self.winfo_ismapped():
             self.atualizar()
 
+    def marcar_gerando(self, pasta: Path, ativo: bool) -> None:
+        """Mostra (ou tira) "gerando…" no ciclo cujo roteiro o Claude está montando."""
+        (self._gerando.add if ativo else self._gerando.discard)(pasta)
+        self._assinatura = None
+        self._mostrar()
+
     def _casos(self, ciclo: Ciclo) -> int:
         assinatura = _assinatura_dos_roteiros(ciclo)
         guardado = self._situacao.get(ciclo.pasta)
@@ -101,7 +111,7 @@ class PainelCiclos(ttk.Frame):
 
     def _mostrar(self) -> None:
         linhas = [(c, self._casos(c)) for c in self._ciclos]
-        assinatura = tuple((c.pasta, n) for c, n in linhas)
+        assinatura = (tuple((c.pasta, n) for c, n in linhas), frozenset(self._gerando))
         if assinatura == self._assinatura:
             return
         self._assinatura = assinatura
@@ -112,7 +122,7 @@ class PainelCiclos(ttk.Frame):
             iid = str(i)
             self._por_iid[iid] = c
             data = c.criado_em[8:10] + "/" + c.criado_em[5:7] if len(c.criado_em) >= 10 else ""
-            self.arvore.insert("", "end", iid=iid, values=(data, c.nome, c.tipo, f"{n} casos" if n else "aguardando"))
+            self.arvore.insert("", "end", iid=iid, values=(data, c.nome, c.tipo, "gerando…" if c.pasta in self._gerando else (f"{n} casos" if n else "aguardando")))
             if anterior and c.pasta == anterior.pasta:
                 self.arvore.selection_set(iid)
         if linhas:
@@ -137,6 +147,9 @@ class PainelCiclos(ttk.Frame):
         if ciclo is None:
             self.botao_principal.configure(text="Ver roteiro")
             estilo.ativar(self.botao_principal, False)
+        elif ciclo.pasta in self._gerando:
+            self.botao_principal.configure(text="Gerando o roteiro…")
+            estilo.ativar(self.botao_principal, False)
         elif self._tem_roteiro(ciclo):
             self.botao_principal.configure(text="Ver roteiro")
             estilo.ativar(self.botao_principal, True)
@@ -156,12 +169,23 @@ class PainelCiclos(ttk.Frame):
         ciclo = self._selecionado()
         if ciclo is None:
             return
+        gerando = ciclo.pasta in self._gerando
         menu = tk.Menu(self, tearoff=False)
-        menu.add_command(label="Gerar o roteiro de novo com o Claude", command=lambda: self._ao_gerar(ciclo))
+        menu.add_command(label="Gerar o roteiro de novo (automático)", command=lambda: self._ao_gerar(ciclo),
+                         state="disabled" if gerando else "normal")
+        if self._ao_gerar_manual is not None:
+            menu.add_command(label="Pedir o roteiro no Claude desktop (manual)", command=lambda: self._ao_gerar_manual(ciclo),
+                             state="disabled" if gerando else "normal")
+        if self._ao_cancelar is not None:
+            menu.add_command(label="Cancelar a geração do roteiro", command=lambda: self._ao_cancelar(ciclo),
+                             state="normal" if gerando else "disabled")
+        menu.add_separator()
         menu.add_command(label="Salvar o roteiro em PDF", command=lambda: self._ao_salvar_pdf(ciclo),
                          state="normal" if self._tem_roteiro(ciclo) else "disabled")
-        menu.add_separator()
         menu.add_command(label="Mostrar a pasta do ciclo", command=lambda: winutil.revelar_no_explorador(ciclo.pasta))
+        if self._ao_revogar is not None:
+            menu.add_separator()
+            menu.add_command(label="Revogar a autorização de enviar telas ao Claude", command=self._ao_revogar)
         menu.tk_popup(self.botao_mais.winfo_rootx(), self.botao_mais.winfo_rooty() + self.botao_mais.winfo_height())
 
     def selecionar(self, pasta: Path) -> None:

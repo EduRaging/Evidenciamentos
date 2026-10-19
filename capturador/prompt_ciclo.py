@@ -48,11 +48,8 @@ def _linhas(itens) -> str:
     return "\n".join(f"  - {i}" for i in itens) if itens else "  (nenhum informado)"
 
 
-def montar_prompt_roteiro(ciclo: Ciclo, testes: list[PastaTeste], ausentes: list[str] | None = None) -> str:
-    """O prompt do roteiro. `testes` são as pastas de referência já lidas; `ausentes`, as que sumiram."""
-    ausentes = ausentes or []
-    orientacao = _ORIENTACAO_DO_TIPO.get(ciclo.tipo, _ORIENTACAO_DO_TIPO["Funcional"])
-    contexto = (
+def _contexto(ciclo: Ciclo) -> str:
+    return (
         "## O ciclo\n"
         f"- Nome: {ciclo.nome}\n"
         f"- Tipo de rodada: {ciclo.tipo}\n"
@@ -67,6 +64,48 @@ def montar_prompt_roteiro(ciclo: Ciclo, testes: list[PastaTeste], ausentes: list
                                      if ciclo.criterios_entrada is not None else "proponha (veja abaixo)") + "\n"
         f"- Critérios de saída: " + ("definidos pelo testador:\n" + _linhas(ciclo.criterios_saida)
                                    if ciclo.criterios_saida is not None else "proponha (veja abaixo)"))
+
+
+def _projeto(ciclo: Ciclo) -> str:
+    orientacao = _ORIENTACAO_DO_TIPO.get(ciclo.tipo, _ORIENTACAO_DO_TIPO["Funcional"])
+    return (
+        "## Como projetar os casos (ISTQB CTFL 4.0, o programa do BSTQB)\n"
+        f"Técnicas, escolhendo as que fizerem sentido para o que as telas mostram (indique em cada caso qual foi usada):\n{_TECNICAS}\n"
+        "Cada caso deve ser atômico e independente, com: ID sequencial (CT-01, CT-02...), título, objetivo, "
+        "pré-condições, dados de teste, passos (cada passo com a AÇÃO e o RESULTADO ESPERADO verificável), "
+        "pós-condições, prioridade por risco (Alta, Média ou Baixa: impacto se falhar x chance de falhar), técnica, "
+        "rastreio (funcionalidade ou tela que o caso cobre) e as evidências de referência que o motivaram.\n"
+        f"- {orientacao}\n"
+        f"- Quantidade: a necessária para cobrir o escopo, em ordem de prioridade, no máximo {MAX_CASOS_PEDIDOS} casos; "
+        "passos curtos (a maioria dos casos com 3 a 10 passos).\n"
+        "- Não repita casos que só mudam o dado de entrada: agrupe-os num caso com dados variados.")
+
+
+_DEFINICAO = (
+    "## Definição do ciclo (para o que o testador não informou)\n"
+    "No campo `ciclo_sugerido` proponha, a partir das telas: `objetivo` (1 ou 2 frases), `escopo` (lista das "
+    "funcionalidades cobertas), `fora_do_escopo`, `riscos`, `sistema` (se der para ver) e, se os critérios estiverem "
+    "para propor, `criterios_entrada` e `criterios_saida` (3 a 6 itens cada, mensuráveis: entrada = ambiente, versão, "
+    "dados e acesso disponíveis e roteiro revisado; saída = percentual de casos executados por prioridade, defeitos "
+    "abertos por severidade, cobertura do escopo e relatório emitido). Não repita nem contradiga o que o testador já "
+    "informou.")
+
+_ABERTURA = (
+    "Você é um analista de testes sênior, formado no currículo ISTQB CTFL 4.0 (o mesmo do BSTQB). Vou te entregar as "
+    "telas de um sistema, capturadas por um testador, e preciso que você monte o ROTEIRO DE TESTES de uma rodada "
+    "(ciclo): casos de teste completos, prontos para o testador executar e evidenciar depois. O testador não vai "
+    "escrever nada: o que ele não informou, proponha a partir das telas.")
+
+
+def _ausentes(ausentes: list[str]) -> str:
+    if not ausentes:
+        return ""
+    return ("\n\nEstes testes de referência não foram encontrados (foram arquivados ou apagados) e ficam de fora: "
+            + "; ".join(f'"{n}"' for n in ausentes) + ".")
+
+
+def montar_prompt_roteiro(ciclo: Ciclo, testes: list[PastaTeste], ausentes: list[str] | None = None) -> str:
+    """O prompt do roteiro para o Claude desktop com a extensão (ele lê as telas e chama `salvar_casos`)."""
     if testes:
         linhas = "\n".join(f'{i}. {t.nome_teste} — pasta "{t.pasta.name}" — {len(t.evidencias)} evidências'
                            for i, t in enumerate(testes, 1))
@@ -78,28 +117,6 @@ def montar_prompt_roteiro(ciclo: Ciclo, testes: list[PastaTeste], ausentes: list
     else:
         telas = ("## Telas de referência\nNenhuma tela de referência disponível: baseie-se só nas informações do ciclo "
                  "e marque a_confirmar=true onde o resultado esperado for hipótese.")
-    if ausentes:
-        telas += ("\n\nEstes testes de referência não foram encontrados (foram arquivados ou apagados) e ficam de fora: "
-                  + "; ".join(f'"{n}"' for n in ausentes) + ".")
-    projeto = (
-        "## Como projetar os casos (ISTQB CTFL 4.0, o programa do BSTQB)\n"
-        f"Técnicas, escolhendo as que fizerem sentido para o que as telas mostram (indique em cada caso qual foi usada):\n{_TECNICAS}\n"
-        "Cada caso deve ser atômico e independente, com: ID sequencial (CT-01, CT-02...), título, objetivo, "
-        "pré-condições, dados de teste, passos (cada passo com a AÇÃO e o RESULTADO ESPERADO verificável), "
-        "pós-condições, prioridade por risco (Alta, Média ou Baixa: impacto se falhar x chance de falhar), técnica, "
-        "rastreio (funcionalidade ou tela que o caso cobre) e as evidências de referência que o motivaram.\n"
-        f"- {orientacao}\n"
-        f"- Quantidade: a necessária para cobrir o escopo, em ordem de prioridade, no máximo {MAX_CASOS_PEDIDOS} casos; "
-        "passos curtos (a maioria dos casos com 3 a 10 passos).\n"
-        "- Não repita casos que só mudam o dado de entrada: agrupe-os num caso com dados variados.")
-    definicao = (
-        "## Definição do ciclo (para o que o testador não informou)\n"
-        "No campo `ciclo_sugerido` proponha, a partir das telas: `objetivo` (1 ou 2 frases), `escopo` (lista das "
-        "funcionalidades cobertas), `fora_do_escopo`, `riscos`, `sistema` (se der para ver) e, se os critérios estiverem "
-        "para propor, `criterios_entrada` e `criterios_saida` (3 a 6 itens cada, mensuráveis: entrada = ambiente, versão, "
-        "dados e acesso disponíveis e roteiro revisado; saída = percentual de casos executados por prioridade, defeitos "
-        "abertos por severidade, cobertura do escopo e relatório emitido). Não repita nem contradiga o que o testador já "
-        "informou.")
     entrega = (
         "## Como entregar\n"
         f'Chame a ferramenta `salvar_casos` UMA vez, com ciclo="{ciclo.pasta.name}", `casos` (lista de objetos), '
@@ -109,9 +126,35 @@ def montar_prompt_roteiro(ciclo: Ciclo, testes: list[PastaTeste], ausentes: list
         "- Se a ferramenta recusar o roteiro, leia a mensagem, corrija e chame de novo.\n"
         "- Depois de salvar, responda só com o nome do ciclo, a quantidade de casos (por prioridade e por técnica) e as "
         "dúvidas em aberto. Não cole os casos no chat: eles já ficam no app.")
-    abertura = (
-        "Você é um analista de testes sênior, formado no currículo ISTQB CTFL 4.0 (o mesmo do BSTQB). Vou te entregar as "
-        "telas de um sistema, capturadas por um testador, e preciso que você monte o ROTEIRO DE TESTES de uma rodada "
-        "(ciclo): casos de teste completos, prontos para o testador executar e evidenciar depois. O testador não vai "
-        "escrever nada: o que ele não informou, proponha a partir das telas.")
-    return "\n\n".join([abertura, contexto, telas, f"## Regras\n{_REGRAS}", projeto, definicao, entrega]) + "\n"
+    return "\n\n".join([_ABERTURA, _contexto(ciclo), telas + _ausentes(ausentes or []), f"## Regras\n{_REGRAS}",
+                        _projeto(ciclo), _DEFINICAO, entrega]) + "\n"
+
+
+def montar_prompt_roteiro_local(ciclo: Ciclo, imagens: dict[str, tuple[str, list[tuple[int, str]]]],
+                                ausentes: list[str] | None = None) -> str:
+    """O prompt do roteiro para o app chamar o Claude Code sozinho (modo restrito, só com a ferramenta Read).
+
+    `imagens` mapeia a subpasta de trabalho (ex.: "t1") para (nome da pasta do teste, [(número da evidência,
+    nome do arquivo)]). O Claude lê as imagens com Read e responde SÓ com o JSON; quem grava o roteiro é o app.
+    """
+    if imagens:
+        blocos = []
+        for subpasta, (nome_teste, arquivos) in imagens.items():
+            lista = ", ".join(f"evidência {n} = {subpasta}/{arq}" for n, arq in arquivos)
+            blocos.append(f'- Teste "{nome_teste}": {lista}')
+        total = sum(len(a) for _, a in imagens.values())
+        telas = (f"## Telas de referência ({total} imagens)\nOs arquivos estão na pasta de trabalho atual:\n" + "\n".join(blocos)
+                 + "\n\nLeia TODAS as imagens com a ferramenta Read antes de escrever qualquer caso: é delas que você "
+                   "deduz as telas, os campos, as regras e os fluxos. Em `evidencias_base` use o nome do teste (o texto "
+                   "entre aspas) e o número da evidência.")
+    else:
+        telas = ("## Telas de referência\nNenhuma tela de referência disponível: baseie-se só nas informações do ciclo "
+                 "e marque a_confirmar=true onde o resultado esperado for hipótese.")
+    entrega = (
+        "## Como entregar\n"
+        "Responda SOMENTE com um objeto JSON (sem texto antes ou depois, sem blocos de código) com os campos `casos` "
+        "(lista de casos), `ciclo_sugerido` (objeto) e `observacoes` (lista de frases curtas com dúvidas e hipóteses "
+        f"que o testador precisa confirmar). Formato de cada caso:\n{_EXEMPLO}\n"
+        "- `prioridade` é Alta, Média ou Baixa. Não use nenhuma ferramenta além de Read: o app valida e grava o roteiro.")
+    return "\n\n".join([_ABERTURA, _contexto(ciclo), telas + _ausentes(ausentes or []), f"## Regras\n{_REGRAS}",
+                        _projeto(ciclo), _DEFINICAO, entrega]) + "\n"

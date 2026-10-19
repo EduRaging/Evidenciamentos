@@ -25,6 +25,7 @@ class Config:
     atalho_janela: str = "ctrl+shift+f7"
     testador: str = ""
     ultima_pasta: str = ""  # último teste finalizado, para o prompt de IA
+    autorizou_envio_ia: str = ""  # quando o usuário autorizou o app a enviar as telas ao Claude (vazio = ainda não)
 
     def __post_init__(self) -> None:
         if not self.pasta_base:

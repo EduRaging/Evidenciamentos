@@ -4,13 +4,15 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import threading
 import tkinter as tk
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from . import (atalhos, captura, ciclos, claude_desktop, config, estilo, extensao_claude, fluxo_ciclo, miniaturas,
-               recursos, roteiro_md, winutil)
+from . import (atalhos, captura, ciclos, claude_desktop, config, estilo, extensao_claude, fluxo_ciclo, ia_local,
+               miniaturas, recursos, roteiro_md, winutil)
 from .aviso import mostrar_aviso
 from .dialogo_ciclo import abrir_dialogo_ciclo
 from .dialogo_prompt import abrir_dialogo_prompt, ler_testes
@@ -29,6 +31,8 @@ class App:
         self.sessao = Sessao(config.pasta_config() / "em_andamento")
         self._fila: queue.Queue[str] = queue.Queue()
         self._ocupado = False
+        self._gerando: dict[Path, ia_local.Controle] = {}  # roteiros que o Claude está montando agora
+        self._fila_ia: queue.Queue = queue.Queue()  # resultados das gerações (vêm de outra thread)
         self.atalhos = atalhos.GerenciadorAtalhos(self._fila.put)
 
         self.raiz = tk.Tk()
@@ -48,6 +52,7 @@ class App:
         if self.sessao.evidencias:
             self._status(f"Sessão anterior retomada: {len(self.sessao.evidencias)} evidência(s).")
         self.raiz.after(50, self._processar_fila)
+        self.raiz.after(500, self._processar_fila_ia)
         self.raiz.after(300, self._registrar_atalhos)
 
     # --- interface ----------------------------------------------------
@@ -67,7 +72,8 @@ class App:
                                       self._criar_ciclo_automatico)
         self.abas.add(self.painel_pdfs, text="  Meus testes  ")
         self.painel_ciclos = PainelCiclos(self.abas, lambda: self.cfg.pasta_base, self._novo_ciclo, self._gerar_roteiro,
-                                          self._ver_roteiro, self._salvar_pdf_roteiro)
+                                          self._ver_roteiro, self._salvar_pdf_roteiro, self._gerar_roteiro_manual,
+                                          self._cancelar_geracao, self._revogar_autorizacao)
         self.abas.add(self.painel_ciclos, text="  Ciclos  ")
         self.abas.bind("<<NotebookTabChanged>>", lambda _e: (self.painel_pdfs.atualizar(), self.painel_ciclos.atualizar()))
 
@@ -379,7 +385,124 @@ class App:
         self._gerar_roteiro(ciclo)
 
     def _gerar_roteiro(self, ciclo) -> None:
-        """Abre o Claude com o pedido do roteiro preenchido; ele grava os casos e a aba Ciclos mostra sozinha."""
+        """Gera o roteiro SOZINHO: o app chama o Claude Code deste computador, valida o que volta e grava."""
+        painel = self.painel_ciclos
+        if ciclo.pasta in self._gerando:
+            painel.var_status.set("O roteiro deste ciclo já está sendo gerado.")
+            return
+        exe = ia_local.localizar_claude()
+        if exe is None:
+            painel.var_status.set("Não achei o Claude Code neste computador: abrindo o pedido no Claude desktop.")
+            self._gerar_roteiro_manual(ciclo)
+            return
+        if not self._autorizou_envio(ciclo):
+            painel.var_status.set("Roteiro não gerado: sem a autorização para enviar as telas ao Claude. "
+                                  "Em Mais ▾ há o pedido manual no Claude desktop.")
+            return
+        if not ia_local.esta_logado(exe):
+            self._oferecer_login(exe)
+            return
+        controle = ia_local.Controle()
+        self._gerando[ciclo.pasta] = controle
+        painel.marcar_gerando(ciclo.pasta, True)
+        painel.var_status.set(f"O Claude está montando o roteiro de “{ciclo.nome}”… pode levar alguns minutos; o app "
+                              "continua livre para capturar.")
+        base = self.cfg.pasta_base
+
+        def trabalho() -> None:  # thread: nada de Tk aqui, só devolve o resultado pela fila
+            try:
+                _, casos = ia_local.gerar_roteiro(ciclo, base, exe, controle)
+                self._fila_ia.put(("ok", ciclo, casos, ""))
+            except ia_local.Cancelado:
+                self._fila_ia.put(("cancelado", ciclo, 0, ""))
+            except ia_local.NaoLogado as exc:
+                self._fila_ia.put(("nao_logado", ciclo, 0, str(exc)))
+            except ia_local.ErroIA as exc:
+                self._fila_ia.put(("erro", ciclo, 0, str(exc)))
+            except Exception as exc:  # noqa: BLE001 - qualquer falha precisa chegar ao usuário, não morrer na thread
+                log.exception("Falha inesperada ao gerar o roteiro")
+                self._fila_ia.put(("erro", ciclo, 0, f"Falha inesperada: {exc}"))
+
+        threading.Thread(target=trabalho, daemon=True, name="gerar-roteiro").start()
+
+    def _autorizou_envio(self, ciclo) -> bool:
+        """Pede (uma vez) a autorização de enviar as telas ao Claude; a resposta fica salva."""
+        if self.cfg.autorizou_envio_ia:
+            return True
+        testes, _ = fluxo_ciclo.testes_de_referencia(ciclo, self.cfg.pasta_base)
+        telas = min(ia_local.MAX_IMAGENS, sum(len(t.evidencias) for t in testes))
+        if not messagebox.askyesno(
+                "Enviar as telas ao Claude?",
+                "Para montar o roteiro sozinho, o app vai enviar ao Claude, pela sua conta no Claude Code deste "
+                f"computador:\n\n• as telas dos testes de referência ({telas} imagens, reduzidas)\n• os dados do ciclo\n\n"
+                "Elas saem do computador. Confirme que as telas não têm dados pessoais ou sensíveis e que o uso do "
+                "Claude é aprovado pela empresa.\n\nA autorização fica salva; dá para revogá-la em Mais ▾ na aba Ciclos.\n\n"
+                "Autorizar?", icon="warning", default="no", parent=self.raiz):
+            return False
+        self.cfg = replace(self.cfg, autorizou_envio_ia=datetime.now().isoformat(timespec="seconds"))
+        config.salvar(self.cfg)
+        return True
+
+    def _revogar_autorizacao(self) -> None:
+        self.cfg = replace(self.cfg, autorizou_envio_ia="")
+        config.salvar(self.cfg)
+        self.painel_ciclos.var_status.set("Autorização revogada: da próxima vez o app volta a perguntar antes de enviar telas.")
+
+    def _oferecer_login(self, exe) -> None:
+        painel = self.painel_ciclos
+        if messagebox.askyesno(
+                "Conectar ao Claude",
+                "Para gerar o roteiro sozinho o app usa o Claude Code instalado neste computador, que ainda não está "
+                "conectado à sua conta do Claude.\n\nConectar agora? Abre uma janela e o navegador para o senhor entrar "
+                "(é uma vez só).", parent=self.raiz):
+            try:
+                ia_local.abrir_login(exe)
+            except OSError as exc:
+                messagebox.showerror("Não foi possível abrir o login", str(exc), parent=self.raiz)
+                return
+            painel.var_status.set("Termine o login na janela que abriu e no navegador; depois use "
+                                  "“Gerar roteiro com o Claude” de novo.")
+        else:
+            painel.var_status.set("Sem a conexão o roteiro automático não funciona. Em Mais ▾ há o pedido manual "
+                                  "no Claude desktop.")
+
+    def _processar_fila_ia(self) -> None:
+        self.raiz.after(500, self._processar_fila_ia)
+        try:
+            while True:
+                resultado, ciclo, casos, mensagem = self._fila_ia.get_nowait()
+                self._gerando.pop(ciclo.pasta, None)
+                self.painel_ciclos.marcar_gerando(ciclo.pasta, False)
+                painel = self.painel_ciclos
+                if resultado == "ok":
+                    painel.var_status.set(f"Roteiro pronto: {casos} {'caso' if casos == 1 else 'casos'} em “{ciclo.nome}”.")
+                    try:
+                        mostrar_aviso(self.raiz, f"Roteiro pronto: {casos} casos", (0, 0, self.raiz.winfo_screenwidth(),
+                                                                                  self.raiz.winfo_screenheight()))
+                    except tk.TclError:
+                        pass
+                elif resultado == "cancelado":
+                    painel.var_status.set("Geração do roteiro cancelada.")
+                elif resultado == "nao_logado":
+                    exe = ia_local.localizar_claude()
+                    if exe is not None:
+                        self._oferecer_login(exe)
+                else:
+                    painel.var_status.set("Não foi possível gerar o roteiro.")
+                    messagebox.showwarning(
+                        "Não foi possível gerar o roteiro", f"{mensagem}\n\nO senhor pode tentar de novo ou pedir o "
+                        "roteiro no Claude desktop (Mais ▾ na aba Ciclos).", parent=self.raiz)
+        except queue.Empty:
+            pass
+
+    def _cancelar_geracao(self, ciclo) -> None:
+        controle = self._gerando.get(ciclo.pasta)
+        if controle is not None:
+            controle.cancelar()
+            self.painel_ciclos.var_status.set("Cancelando a geração do roteiro…")
+
+    def _gerar_roteiro_manual(self, ciclo) -> None:
+        """Plano B: abre o Claude desktop com o pedido do roteiro preenchido (o senhor aperta Enter)."""
         painel = self.painel_ciclos
         problemas = extensao_claude.avisos(ciclo.pasta.parent, exigir_ferramenta="salvar_casos")
         if problemas and not messagebox.askyesno(
@@ -451,6 +574,12 @@ class App:
             self._registrar_atalhos()
 
     def _ao_fechar(self) -> None:
+        if self._gerando:
+            if not messagebox.askyesno("Sair", "O Claude está montando um roteiro agora. Sair cancela a geração. "
+                                       "Sair mesmo assim?", icon="warning", default="no", parent=self.raiz):
+                return
+            for controle in self._gerando.values():
+                controle.cancelar()
         if self.sessao.evidencias:
             resposta = messagebox.askyesnocancel(
                 "Sair",
