@@ -33,11 +33,13 @@ def _marca(itens: tuple) -> str:
 
 class PainelPdfs(ttk.Frame):
     def __init__(self, pai: tk.Misc, obter_base: Callable[[], str],
-                 ao_enviar_ao_claude: Callable[[list[Path]], None] | None = None) -> None:
-        """`ao_enviar_ao_claude` recebe as pastas (sem repetir) dos testes selecionados."""
+                 ao_enviar_ao_claude: Callable[[list[Path]], None] | None = None,
+                 ao_criar_ciclo: Callable[[list[Path]], None] | None = None) -> None:
+        """Os dois callbacks recebem as pastas (sem repetir) dos testes selecionados."""
         super().__init__(pai, padding=(18, 16, 18, 12))
         self._obter_base = obter_base
         self._ao_enviar_ao_claude = ao_enviar_ao_claude
+        self._ao_criar_ciclo = ao_criar_ciclo
         self._testes: list[TesteRegistrado] = []
         self._por_iid: dict[str, TesteRegistrado] = {}
         self._assinatura: tuple | None = None
@@ -183,6 +185,9 @@ class PainelPdfs(ttk.Frame):
             menu.add_command(label="Enviar ao Claude para analisar…" if len(marcados) == 1
                              else f"Enviar ao Claude para analisar {len(marcados)} testes…",
                              command=self.enviar_ao_claude)
+            if self._ao_criar_ciclo is not None:
+                menu.add_command(label="Criar ciclo de testes com " + ("este teste…" if len(marcados) == 1 else "estes testes…"),
+                                 command=self.criar_ciclo)
             menu.add_separator()
         if um is not None:
             if len(um.pdfs) == 1:
@@ -227,6 +232,12 @@ class PainelPdfs(ttk.Frame):
         if not pastas or self._ao_enviar_ao_claude is None:
             return
         self._ao_enviar_ao_claude(pastas)
+
+    def criar_ciclo(self) -> None:
+        """Cria um ciclo de testes tendo os testes selecionados como telas de referência."""
+        pastas = self._pastas_selecionadas()
+        if pastas and self._ao_criar_ciclo is not None:
+            self._ao_criar_ciclo(pastas)
 
     def _com_arquivo(self, pdf: RegistroPdf | None, acao: Callable[[RegistroPdf], None]) -> None:
         if pdf is None:

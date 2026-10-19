@@ -94,8 +94,54 @@ sessão com miniatura**, numeradas, com o tipo e a hora. Enquanto não há nenhu
 convite em vez de uma tabela vazia. Duplo clique (ou Enter) abre a imagem; **Delete** (ou o clique
 direito) remove a selecionada. A ação principal é **Finalizar teste**, que mostra quantas
 evidências entram e só liga quando há ao menos uma; **Descartar** e **Configurações** são
-secundárias. Ao finalizar, a janela de conclusão oferece **Enviar ao Claude…** como ação principal.
+secundárias. Ao finalizar, a janela de conclusão oferece **Criar ciclo de testes** como ação principal
+(veja a próxima seção) e, ao lado, **Relatório com o Claude…**.
 
+## Ciclos de teste (o roteirizador)
+
+Um **ciclo** é uma *rodada de testes*. O senhor **só fornece as telas**, capturadas e finalizadas do
+jeito de sempre; daí em diante é automático, até a hora de executar e evidenciar o ciclo de novo.
+
+1. Ao finalizar um teste, clique em **Criar ciclo de testes** (ou, em **Meus testes**, selecione
+   o(s) teste(s) e use **Mais ▾ › Criar ciclo de testes**). O ciclo nasce sem formulário: o nome
+   vem do teste ("Ciclo - Login no ERP") e as telas viram as **telas de referência**.
+2. O app abre o **Claude** com o pedido do roteiro já preenchido (o senhor aperta Enter). Ele olha as
+   telas pela extensão e grava o **roteiro de testes**, sem o senhor escrever nada.
+3. Na aba **Ciclos** o roteiro aparece sozinho ("5 casos"); **Ver roteiro** abre a janela com os
+   casos e a definição do ciclo, e **Salvar o roteiro em PDF** gera um documento formal (feito pelo
+   app, não pela IA) na pasta do ciclo.
+
+**O que o Claude entrega**, no padrão do CTFL 4.0 (o programa do BSTQB):
+- **Casos de teste** atômicos, cada um com ID (CT-01…), título, objetivo, **técnica** (partição de
+  equivalência, valor limite, tabela de decisão, transição de estado, cenário, adivinhação de erros
+  etc.), **prioridade por risco**, pré-condições, dados de teste (fictícios), **passos com a ação e
+  o resultado esperado de cada um**, pós-condições, rastreio e as telas que o motivaram. Quando a
+  regra não aparece nas telas, o caso vem marcado "resultado esperado a confirmar".
+- A **definição do ciclo** que o senhor não preencheu: objetivo, escopo, riscos e os **critérios de
+  entrada e de saída**. O que o senhor preencher sempre vale mais; o que faltar vem da IA e, nos
+  critérios, do padrão do CTFL. A janela marca a origem de cada parte ("proposto pela IA", "padrão
+  do CTFL").
+- **Dúvidas e hipóteses** a confirmar.
+
+**Ajustes opcionais.** O botão **+ Novo ciclo** (aba Ciclos) permite escolher várias telas e, em
+**Ajustar parâmetros**, informar tipo de rodada (funcional, regressão, confirmação de correção ou
+fumaça), sistema, versão, ambiente, testador, período, objetivo, escopo e critérios.
+
+**Onde fica:** `<pasta de evidências>\_ciclos\<data> - <nome>\` com o `ciclo.json` (parâmetros) e um
+`roteiro-001.json` por geração (gerar de novo cria o 002; nada é sobrescrito). A pasta começa com `_`
+de propósito: o registro de testes e a leitura do Claude a ignoram.
+
+**Segurança.** A extensão ganhou a ferramenta `salvar_casos`, que só grava `roteiro-NNN.json` dentro
+de `_ciclos\<ciclo>`, só em pasta que tenha um `ciclo.json` válido, com criação exclusiva, trava,
+teto de 30 roteiros e **validação estrita** (tipos, tamanhos, IDs únicos, textos de uma linha sem
+caracteres de controle ou de direção, nomes de pasta simples). O app **valida tudo de novo ao ler**:
+um roteiro adulterado é pulado. O roteiro é um **rascunho da IA**: revise antes de executar. Exige
+**reinstalar a extensão** (`dist\CapturadorEvidencias.mcpb`); se a instalada for antiga, o app avisa
+antes de pedir o roteiro.
+
+**Próximas etapas (ainda não feitas):** execução guiada do ciclo (passo a passo, com a evidência
+ligada ao passo e o resultado de cada caso), relatório de execução do ciclo com a checagem dos
+critérios de saída e as métricas do CTFL.
 ## Prompt para IA (casos de teste e relatório)
 
 O app não se conecta a nenhuma IA: ele monta um **prompt pronto** para o senhor enviar ao Claude
@@ -178,9 +224,11 @@ computador (com as imagens anexadas), sem depender de a IA gerar arquivos.
 | `obter_teste` | dados do teste e a lista numerada de evidências |
 | `ver_evidencia` | devolve a imagem de uma evidência para a IA olhar (reduzida a no máximo 1568 px) |
 | `salvar_relatorio_pdf` | grava o relatório (Markdown) em PDF + `.md` na pasta do teste |
+| `salvar_casos` | grava o roteiro de testes (os casos) de um **ciclo** em `_ciclos\<ciclo>\roteiro-NNN.json` (veja "Ciclos de teste") |
 
 Há também o prompt `analisar_teste`, com as instruções completas (mesmas regras do prompt colado,
-inclusive as sugestões de casos adicionais ISTQB/BSTQB; `sugerir_casos=false` as desliga).
+inclusive as sugestões de casos adicionais ISTQB/BSTQB; `sugerir_casos=false` as desliga), e o prompt
+`gerar_roteiro`, que pede o roteiro de testes de um ciclo.
 
 **Segurança**: toda ferramenta recebe só o *nome da pasta* do teste, sempre resolvido dentro da
 pasta de evidências; nada fora dela é lido ou escrito, e nenhum arquivo é sobrescrito (o segundo
@@ -279,8 +327,11 @@ não descreve isolamento; trate-a como um programa comum). O que foi feito para 
 
 - **Código próprio**: sem rede e sem execução de comandos (conferido por busca nos módulos
   empacotados). Lê só os PNGs dos testes dentro da pasta configurada e escreve só PDF/`.md`
-  novos nela, sem sobrescrever. O confinamento foi testado com `..`, caminhos absolutos, nomes
-  adulterados no `evidencias.json` e links simbólicos.
+  novos nela e, para os ciclos, `roteiro-NNN.json` novos em `_ciclos`, sem sobrescrever. O
+  confinamento foi testado com `..`, caminhos absolutos, nomes adulterados no `evidencias.json` e
+  links simbólicos. (A ferramenta `salvar_casos` e a validação do roteiro entraram depois da revisão
+  independente de segurança: eles seguem os mesmos padrões, com testes próprios, mas **não foram
+  revisados por terceiros**.)
 - **Dependências**: 32 pacotes de terceiros, **travados com hash** em `requirements-mcpb.lock` e
   instalados só como pacotes prontos (`--only-binary`), sem compilar nada. Um pacote adulterado
   no PyPI é recusado: testado trocando todos os hashes, o `pip` falhou e não instalou nada.

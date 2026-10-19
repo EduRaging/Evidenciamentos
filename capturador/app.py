@@ -9,12 +9,16 @@ from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from . import atalhos, captura, config, estilo, miniaturas, recursos, winutil
+from . import (atalhos, captura, ciclos, claude_desktop, config, estilo, extensao_claude, fluxo_ciclo, miniaturas,
+               recursos, roteiro_md, winutil)
 from .aviso import mostrar_aviso
+from .dialogo_ciclo import abrir_dialogo_ciclo
 from .dialogo_prompt import abrir_dialogo_prompt, ler_testes
 from .dialogos import abrir_configuracoes
+from .painel_ciclos import PainelCiclos
 from .painel_pdfs import PainelPdfs
 from .sessao import ROTULOS, Sessao
+from .visualizador_roteiro import abrir_visualizador
 
 log = logging.getLogger(__name__)
 
@@ -59,9 +63,13 @@ class App:
         self.abas.pack(fill="both", expand=True)
         quadro = ttk.Frame(self.abas, padding=(18, 16, 18, 12))
         self.abas.add(quadro, text="  Capturar  ")
-        self.painel_pdfs = PainelPdfs(self.abas, lambda: self.cfg.pasta_base, self._analisar_varios)
+        self.painel_pdfs = PainelPdfs(self.abas, lambda: self.cfg.pasta_base, self._analisar_varios,
+                                      self._criar_ciclo_automatico)
         self.abas.add(self.painel_pdfs, text="  Meus testes  ")
-        self.abas.bind("<<NotebookTabChanged>>", lambda _e: self.painel_pdfs.atualizar())
+        self.painel_ciclos = PainelCiclos(self.abas, lambda: self.cfg.pasta_base, self._novo_ciclo, self._gerar_roteiro,
+                                          self._ver_roteiro, self._salvar_pdf_roteiro)
+        self.abas.add(self.painel_ciclos, text="  Ciclos  ")
+        self.abas.bind("<<NotebookTabChanged>>", lambda _e: (self.painel_pdfs.atualizar(), self.painel_ciclos.atualizar()))
 
         # --- nome do teste e os dois botões de captura
         ttk.Label(quadro, text="Nome do teste", style="Suave.TLabel").pack(anchor="w")
@@ -291,7 +299,8 @@ class App:
             escolha.append(acao)
             janela.destroy()
 
-        estilo.botao_primario(botoes, "Enviar ao Claude…", lambda: fechar("prompt")).pack(side="left")
+        estilo.botao_primario(botoes, "Criar ciclo de testes", lambda: fechar("ciclo")).pack(side="left")
+        ttk.Button(botoes, text="Relatório com o Claude…", command=lambda: fechar("prompt")).pack(side="left", padx=(10, 0))
         ttk.Button(botoes, text="Abrir pasta", command=lambda: fechar("pasta")).pack(side="left", padx=(10, 0))
         ttk.Button(botoes, text="Fechar", command=fechar).pack(side="right")
         janela.protocol("WM_DELETE_WINDOW", fechar)
@@ -304,6 +313,8 @@ class App:
             os.startfile(pasta)
         elif acao == "prompt":
             self._preparar_prompt(pasta)
+        elif acao == "ciclo":
+            self._criar_ciclo_automatico([pasta])
 
     def _preparar_prompt(self, pasta: Path | None = None) -> None:
         """Abre a janela do prompt de IA para `pasta` (padrão: o último teste finalizado)."""
@@ -341,6 +352,80 @@ class App:
             abrir_dialogo_prompt(self.raiz, [t.pasta for t in testes], self.cfg.pasta_base)
         except ValueError as exc:
             messagebox.showwarning("Não foi possível preparar o envio", str(exc), parent=self.raiz)
+
+    # --- ciclos de teste ----------------------------------------------
+    def _criar_ciclo_automatico(self, pastas: list[Path]) -> None:
+        """Cria o ciclo só com as telas (nome, objetivo, escopo e critérios ficam por conta do Claude) e já pede o roteiro."""
+        try:
+            ciclo, ignorados = fluxo_ciclo.criar_a_partir_de_testes(self.cfg.pasta_base, pastas)
+        except (ValueError, OSError) as exc:
+            messagebox.showwarning("Não foi possível criar o ciclo", str(exc), parent=self.raiz)
+            return
+        self._ciclo_criado(ciclo, ignorados)
+
+    def _novo_ciclo(self) -> None:
+        """Abre a janela de novo ciclo (para escolher várias telas ou ajustar parâmetros) e pede o roteiro."""
+        resultado = abrir_dialogo_ciclo(self.raiz, self.cfg.pasta_base, (), self.cfg.testador)
+        if resultado is not None:
+            self._ciclo_criado(*resultado)
+
+    def _ciclo_criado(self, ciclo, ignorados: list[tuple[str, str]]) -> None:
+        if ignorados:
+            lista = "\n".join(f"• {nome}" for nome, _motivo in ignorados)
+            messagebox.showinfo("Testes ignorados", "Estes testes não têm imagens para servir de referência e ficaram "
+                                f"de fora do ciclo:\n\n{lista}", parent=self.raiz)
+        self.abas.select(self.painel_ciclos)
+        self.painel_ciclos.selecionar(ciclo.pasta)
+        self._gerar_roteiro(ciclo)
+
+    def _gerar_roteiro(self, ciclo) -> None:
+        """Abre o Claude com o pedido do roteiro preenchido; ele grava os casos e a aba Ciclos mostra sozinha."""
+        painel = self.painel_ciclos
+        problemas = extensao_claude.avisos(ciclo.pasta.parent, exigir_ferramenta="salvar_casos")
+        if problemas and not messagebox.askyesno(
+                "A extensão não está pronta", "\n\n".join(problemas) + "\n\nPedir o roteiro ao Claude mesmo assim? "
+                "(Ele provavelmente não conseguirá gravar os casos.)", icon="warning", default="no", parent=self.raiz):
+            painel.var_status.set("Roteiro não pedido: ajuste a extensão e use “Gerar roteiro com o Claude”.")
+            return
+        try:
+            pedido = fluxo_ciclo.montar_pedido(ciclo, self.cfg.pasta_base)
+        except ValueError as exc:
+            messagebox.showwarning("Não foi possível montar o pedido", str(exc), parent=self.raiz)
+            return
+        painel.var_status.set("Abrindo o Claude…")
+        self.raiz.update_idletasks()
+        resultado = claude_desktop.abrir_conversa(pedido)
+        if resultado == claude_desktop.PREENCHIDO:
+            painel.var_status.set("O Claude abriu com o pedido do roteiro preenchido: aperte Enter. Quando ele terminar, "
+                                  "os casos aparecem aqui sozinhos (confira o status em “Roteiro”).")
+            return
+        self.raiz.clipboard_clear()
+        self.raiz.clipboard_append(pedido)
+        self.raiz.update()
+        painel.var_status.set(
+            "O pedido é grande demais para ir no link: o Claude abriu em branco e o texto está copiado, cole com Ctrl+V."
+            if resultado == claude_desktop.VAZIA else
+            "Não consegui abrir o Claude desktop. O pedido foi copiado: abra o Claude e cole com Ctrl+V.")
+
+    def _ver_roteiro(self, ciclo) -> None:
+        try:
+            abrir_visualizador(self.raiz, ciclo, lambda: self._gerar_roteiro(ciclo), lambda: self._salvar_pdf_roteiro(ciclo))
+        except ValueError as exc:
+            messagebox.showinfo("Roteiro", str(exc), parent=self.raiz)
+
+    def _salvar_pdf_roteiro(self, ciclo) -> None:
+        roteiro = ciclos.ler_roteiro_mais_recente(ciclo.pasta)
+        if roteiro is None:
+            messagebox.showinfo("Roteiro", "Este ciclo ainda não tem roteiro.", parent=self.raiz)
+            return
+        try:
+            caminho = roteiro_md.gerar_pdf_do_roteiro(ciclo, roteiro)
+            os.startfile(caminho)
+        except Exception as exc:  # noqa: BLE001 - qualquer falha de geração deve aparecer ao usuário
+            log.exception("Falha ao gerar o PDF do roteiro")
+            messagebox.showerror("Erro ao gerar o PDF do roteiro", str(exc), parent=self.raiz)
+            return
+        self.painel_ciclos.var_status.set(f"PDF do roteiro salvo em: {caminho}")
 
     def _descartar(self) -> None:
         if not self.sessao.evidencias:

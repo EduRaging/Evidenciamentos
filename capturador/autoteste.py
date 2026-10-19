@@ -14,8 +14,9 @@ from pathlib import Path
 
 from PIL import Image, ImageTk
 
-from . import (__version__, arquivamento, atalhos, captura, claude_desktop, dialogo_prompt, estilo, metadados,
-               miniaturas, painel_pdfs, recursos, registro_pdfs, winutil)
+from . import (__version__, arquivamento, atalhos, captura, ciclos, claude_desktop, dialogo_prompt, estilo,
+               fluxo_ciclo, metadados, miniaturas, painel_ciclos, painel_pdfs, recursos, registro_pdfs, roteiro_md,
+               visualizador_roteiro, winutil)
 from .pdf_relatorio import _registrar_fontes
 from .prompt_ia import Formulario, montar_prompt
 from .sessao import Sessao
@@ -125,6 +126,31 @@ def _miniaturas_e_arquivamento() -> str:
     return "miniatura, estilo, um item por teste e arquivar sem apagar"
 
 
+def _ciclo_de_testes() -> str:
+    """Do teste ao ciclo: cria só com as telas, grava e lê um roteiro, monta o pedido e o PDF do roteiro."""
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = _finalizar_exemplo(Path(tmp))
+        base = pasta.parent
+        ciclo, ignorados = fluxo_ciclo.criar_a_partir_de_testes(base, [pasta])
+        if ignorados or not ciclo.nome.startswith("Ciclo - "):
+            raise AssertionError(f"ciclo inesperado: {ciclo.nome!r} {ignorados}")
+        caso = {"id": "CT-01", "titulo": "Caso de autoteste", "objetivo": "Verificar", "tecnica": "Checklist",
+                "prioridade": "Alta", "passos": [{"acao": "Abrir a tela", "resultado_esperado": "Tela exibida"}]}
+        ciclos.gravar_roteiro(ciclo.pasta, ciclos.validar_casos([caso]), ["Uma dúvida"], ciclo_sugerido={"objetivo": "Autoteste"})
+        roteiro = ciclos.ler_roteiro_mais_recente(ciclo.pasta)
+        if roteiro is None or [c.id for c in roteiro.casos] != ["CT-01"]:
+            raise AssertionError("o roteiro gravado não foi lido de volta")
+        pedido = fluxo_ciclo.montar_pedido(ciclo, base)
+        if "`salvar_casos`" not in pedido or ciclo.pasta.name not in pedido or pasta.name not in pedido:
+            raise AssertionError("o pedido do roteiro está incompleto")
+        pdf = roteiro_md.gerar_pdf_do_roteiro(ciclo, roteiro)
+        if not pdf.read_bytes().startswith(b"%PDF"):
+            raise AssertionError("PDF do roteiro inválido")
+        if not (painel_ciclos.PainelCiclos and visualizador_roteiro.abrir_visualizador):
+            raise AssertionError("janelas de ciclo indisponíveis")
+    return f"ciclo só com as telas, roteiro de {len(roteiro.casos)} caso, pedido de {len(pedido)} caracteres e PDF"
+
+
 def _registro_de_pdfs() -> str:
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp) / "base"
@@ -162,6 +188,7 @@ VERIFICACOES = (
     ("envio ao Claude desktop", _envio_ao_claude),
     ("registro de PDFs", _registro_de_pdfs),
     ("miniaturas e arquivamento", _miniaturas_e_arquivamento),
+    ("ciclo de testes e roteiro", _ciclo_de_testes),
 )
 
 
