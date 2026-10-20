@@ -169,13 +169,14 @@ gravar e de novo ao ler** (tipos, tamanhos, IDs únicos, textos de uma linha sem
 ou de direção, nomes de pasta simples); um roteiro adulterado é pulado, e nada inválido é gravado.
 Como a IA não tem ferramenta nenhuma, texto escondido numa tela no máximo distorce o roteiro:
 não alcança arquivos, comandos nem a rede. **Atenção à rede:** nestes fluxos (o roteiro e o **Gerar
-relatório** de Meus testes) o app **inicia um processo (o Claude Code) que se conecta à Anthropic**; a
-medição de "zero conexões externas" abaixo vale para o app e a extensão sem esses fluxos, e a TI precisa
-saber disso. O modo restrito foi aceito pelo Claude Code instalado (versão 2.1.299). Em 20/10/2026 o
-**relatório** foi exercitado com o Claude de verdade, só com duas telas fictícias geradas para o teste: 19 s,
-resposta no formato esperado, texto das telas lido e PDF com as imagens anexadas. O **roteiro** do ciclo só
-foi exercitado com um Claude Code simulado (a janela, as threads, a validação e a gravação), mas usa o mesmo
-caminho.
+relatório** de Meus testes) o app **inicia um processo (o Claude Code) que se conecta à Anthropic**, e a
+TI precisa saber disso. O código do app não importa nenhuma biblioteca de rede: esse processo é o único
+caminho de rede do app. A medição de rede feita antes (vigia de sockets e DNS mais amostragem de TCP/UDP, com
+controle positivo) cobriu só o **servidor da extensão** e não achou nenhuma tentativa de conexão; ela **não**
+cobre o app nem o Claude Code. O modo restrito foi aceito pelo Claude Code instalado (versão 2.1.299). Em
+20/10/2026 os dois fluxos foram exercitados com o Claude de verdade, só com telas fictícias geradas para o teste:
+o **relatório** (19 s com duas telas, e 53 s com 40) e o **roteiro** do ciclo (76 s, 17 casos validados e gravados
+pelo app, com as respostas citando telas até a 40).
 
 **Plano B (manual) e a extensão.** Pelo Claude desktop, a extensão ganhou a ferramenta `salvar_casos`,
 que só grava `roteiro-NNN.json` dentro de `_ciclos\<ciclo>`, só em pasta com `ciclo.json` válido, com
@@ -472,5 +473,7 @@ Inno Setup 6 instalado, o `build.bat` já o detecta e gera `installer_output\Set
 python -m unittest discover -s tests -t .
 ```
 
-Cobrem a conversão de atalhos, nomes de pasta, a sessão (criar, remover, retomar, finalizar) e a
-geração do PDF.
+São cerca de 400 testes (397 na versão 0.9.3; 40 deles só rodam com o pacote `mcp` instalado). Cobrem
+a conversão de atalhos, nomes de pasta, a sessão (criar, remover, retomar, finalizar), a geração do PDF,
+os ciclos e a validação dos roteiros, o comando restrito do Claude Code e a leitura da resposta, o
+servidor MCP e as regressões da revisão de segurança.
