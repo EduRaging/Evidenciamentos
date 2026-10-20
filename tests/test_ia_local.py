@@ -257,6 +257,7 @@ class Execucao(unittest.TestCase):
         self.assertNotIn("PROMPT LONGO", comando)  # nunca na linha de comando (visível a outros programas)
         self.assertEqual(opcoes["cwd"], str(self.pasta))
         self.assertEqual(opcoes["creationflags"], ia_local.SEM_JANELA)
+        self.assertEqual(opcoes["errors"], "replace")  # um erro em outra codificação não derruba a leitura
         self.assertEqual(resposta["casos"][0]["id"], "CT-01")
 
     def test_tempo_esgotado_interrompe_o_processo(self):
@@ -389,6 +390,111 @@ class GerarRoteiro(unittest.TestCase):
             imagem.write_bytes(b"lixo")
         with self.assertRaises(ia_local.ErroIA) as erro:
             self.gerar(ProcessoFalso(saida_ok()))
+        self.assertIn("preparar as telas", str(erro.exception))
+
+
+
+RELATORIO = {"status_sugerido": "Aprovado", "resumo": "Login funcionou.",
+             "relatorio_markdown": "## Casos executados\n\n| ID | Resultado |\n|---|---|\n| CT-01 | Aprovado (Evidência 1) |\n"}
+
+
+class GerarRelatorio(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.raiz = Path(self._tmp.name)
+        self.base = self.raiz / "Evidencias"
+        sessao = Sessao(self.raiz / "trab")
+        for _ in range(3):
+            sessao.adicionar(Image.new("RGB", (300, 200), "navy"), "tela")
+        self.teste = sessao.finalizar("Cadastro de fornecedor", "QA", self.base)
+
+    def gerar(self, processo, pasta=None, **extra):
+        return ia_local.gerar_relatorio(pasta or self.teste, self.base, Path("claude.exe"),
+                                        abrir_processo=FabricaDeProcessos(processo), **extra)
+
+    def test_de_ponta_a_ponta_o_pdf_e_gravado_pelo_app_na_pasta_do_teste(self):
+        dados = self.gerar(ProcessoFalso(saida_ok(RELATORIO)))
+        pdf = self.teste / dados["pdf"]
+        self.assertEqual(pdf.name, "Relatório de testes - Cadastro de fornecedor.pdf")
+        self.assertTrue(pdf.read_bytes().startswith(b"%PDF"))
+        self.assertEqual(dados["evidencias_anexadas"], 3)
+        texto = (self.teste / dados["markdown"]).read_text(encoding="utf-8")
+        self.assertTrue(texto.startswith("**Status sugerido pela IA:** Aprovado"))
+        self.assertIn("CT-01", texto)
+
+    def test_o_pedido_usa_o_esquema_do_relatorio_e_lista_as_telas_sem_ferramentas_da_extensao(self):
+        processo = ProcessoFalso(saida_ok(RELATORIO))
+        fabrica = FabricaDeProcessos(processo)
+        ia_local.gerar_relatorio(self.teste, self.base, Path("claude.exe"), abrir_processo=fabrica)
+        comando = fabrica.chamadas[0][0]
+        self.assertIn("relatorio_markdown", comando[comando.index("--json-schema") + 1])
+        self.assertNotIn('"casos"', comando[comando.index("--json-schema") + 1])
+        self.assertIn("t1/01.png", processo.entrada)
+        self.assertIn("Cadastro de fornecedor", processo.entrada)
+        self.assertNotIn("salvar_relatorio_pdf", processo.entrada)
+        self.assertNotIn("ver_evidencia", processo.entrada)
+
+    def test_status_fora_da_lista_vira_inconclusivo_e_o_texto_da_ia_nao_vira_marcacao(self):
+        ruim = {"status_sugerido": "Aprovado com louvor", "relatorio_markdown": "<script>alert(1)</script> **ok**"}
+        dados = self.gerar(ProcessoFalso(saida_ok(ruim)))
+        self.assertIn("Inconclusivo", (self.teste / dados["markdown"]).read_text(encoding="utf-8"))
+        self.assertNotIn(b"<script>", (self.teste / dados["pdf"]).read_bytes())
+
+    def test_resposta_sem_texto_do_relatorio_nao_grava_nada(self):
+        for ruim in ({"status_sugerido": "Aprovado"}, {"status_sugerido": "Aprovado", "relatorio_markdown": "   "},
+                     {"status_sugerido": "Aprovado", "relatorio_markdown": ["lista"]}):
+            with self.subTest(ruim=ruim), self.assertRaises(ia_local.ErroIA):
+                self.gerar(ProcessoFalso(saida_ok(ruim)))
+        self.assertEqual(list(self.teste.glob("Relat*")), [])
+
+    def test_nunca_sobrescreve_um_relatorio_que_ja_existe(self):
+        antigo = self.teste / "Relatório de testes - Cadastro de fornecedor.pdf"
+        antigo.write_bytes(b"%PDF antigo")
+        dados = self.gerar(ProcessoFalso(saida_ok(RELATORIO)))
+        self.assertEqual(dados["pdf"], "Relatório de testes - Cadastro de fornecedor (2).pdf")
+        self.assertEqual(antigo.read_bytes(), b"%PDF antigo")
+
+    def test_so_aceita_teste_direto_dentro_da_pasta_de_evidencias(self):
+        fora = self.raiz / "Outra" / self.teste.name
+        fora.parent.mkdir()
+        (fora.parent / "x").mkdir()
+        for pasta in (fora, self.base / "_em_andamento", self.base / "nao existe", self.base):
+            with self.subTest(pasta=pasta), self.assertRaises(ia_local.ErroIA):
+                self.gerar(ProcessoFalso(saida_ok(RELATORIO)), pasta=pasta)
+
+    def test_a_pasta_temporaria_some_no_fim_dando_certo_ou_errado(self):
+        usada = []
+
+        def abrir_certo(comando, **opcoes):
+            usada.append(Path(opcoes["cwd"]))
+            return ProcessoFalso(saida_ok(RELATORIO))
+
+        def abrir_errado(comando, **opcoes):
+            usada.append(Path(opcoes["cwd"]))
+            return ProcessoFalso("", "quebrou")
+
+        ia_local.gerar_relatorio(self.teste, self.base, Path("claude.exe"), abrir_processo=abrir_certo)
+        with self.assertRaises(ia_local.ErroIA):
+            ia_local.gerar_relatorio(self.teste, self.base, Path("claude.exe"), abrir_processo=abrir_errado)
+        self.assertEqual(len(usada), 2)
+        self.assertFalse(any(p.exists() for p in usada))
+
+    def test_nao_logado_e_cancelamento_chegam_como_erros_proprios(self):
+        saida = json.dumps({"type": "result", "is_error": True, "result": "Not logged in · Please run /login"})
+        with self.assertRaises(ia_local.NaoLogado):
+            self.gerar(ProcessoFalso(saida))
+        controle = ia_local.Controle()
+        controle.cancelar()
+        with self.assertRaises(ia_local.Cancelado):
+            self.gerar(ProcessoFalso(saida_ok(RELATORIO)), controle=controle)
+        self.assertEqual(list(self.teste.glob("Relat*")), [])
+
+    def test_teste_sem_imagens_aproveitaveis(self):
+        for imagem in self.teste.glob("*.png"):
+            imagem.write_bytes(b"lixo")
+        with self.assertRaises(ia_local.ErroIA) as erro:
+            self.gerar(ProcessoFalso(saida_ok(RELATORIO)))
         self.assertIn("preparar as telas", str(erro.exception))
 
 

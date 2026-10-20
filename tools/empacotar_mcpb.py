@@ -26,7 +26,7 @@ from capturador import __version__  # noqa: E402
 NOME_ARQUIVO = "CapturadorEvidencias.mcpb"
 # só o que o servidor usa (nada de Tk nem de captura de tela)
 MODULOS = ("__init__", "config", "metadados", "prompt_ia", "relatorio_md", "sessao", "pdf_relatorio",
-           "mcp_servidor", "imagens", "ciclos", "prompt_ciclo")
+           "mcp_servidor", "imagens", "ciclos", "prompt_ciclo", "gravacao")
 
 PONTO_DE_ENTRADA = '''"""Ponto de entrada da extensão: inicia o servidor MCP do Capturador de Evidências."""
 import os

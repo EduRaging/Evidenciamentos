@@ -101,7 +101,9 @@ class FerramentasDoServidor(unittest.TestCase):
     def test_markdown_e_gravado_antes_do_pdf(self):
         from unittest import mock
 
-        with mock.patch.object(self.srv, "gerar_pdf_de_markdown", side_effect=RuntimeError("falha simulada")):
+        from capturador import gravacao
+
+        with mock.patch.object(gravacao, "gerar_pdf_de_markdown", side_effect=RuntimeError("falha simulada")):
             with self.assertRaises(Exception):
                 self.srv.salvar_relatorio_pdf(self.nome, "Parcial", "# conteudo da IA")
         self.assertEqual((self.pasta / "Parcial.md").read_text(encoding="utf-8"), "# conteudo da IA")

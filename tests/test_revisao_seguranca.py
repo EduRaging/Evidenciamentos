@@ -14,7 +14,7 @@ from unittest import mock
 
 from PIL import Image
 
-from capturador import imagens, metadados, relatorio_md
+from capturador import gravacao, imagens, metadados, relatorio_md
 from capturador.relatorio_md import EvidenciaPdf, gerar_pdf_de_markdown
 from capturador.sessao import Sessao, nome_seguro
 
@@ -282,7 +282,7 @@ class ServidorAposARevisao(unittest.TestCase):
         self.assertEqual(fora.read_text(encoding="utf-8"), "conteúdo precioso")
 
     def test_falha_do_pdf_remove_o_pdf_parcial_e_guarda_o_markdown(self):
-        with mock.patch.object(self.srv, "gerar_pdf_de_markdown", side_effect=RuntimeError("falha")):
+        with mock.patch.object(gravacao, "gerar_pdf_de_markdown", side_effect=RuntimeError("falha")):
             with self.assertRaises(Exception):
                 self.srv.salvar_relatorio_pdf(self.nome, "Parcial", "# trabalho da IA")
         self.assertFalse((self.pasta / "Parcial.pdf").exists())  # nada de PDF vazio/truncado

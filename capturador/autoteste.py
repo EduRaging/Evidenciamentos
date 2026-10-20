@@ -173,7 +173,28 @@ def _geracao_automatica() -> str:
     if "casos" not in resposta:
         raise AssertionError("resposta estruturada não lida")
     achado = ia_local.localizar_claude()
-    return f"comando restrito, telas reduzidas e resposta; Claude Code {"encontrado" if achado else "não encontrado (cai no pedido manual)"}"
+    relatorio = _relatorio_automatico()
+    return (f"comando restrito, telas reduzidas e resposta; {relatorio}; Claude Code "
+            f"{'encontrado' if achado else 'não encontrado (o app avisa e deixa o pedido manual em Mais ▾)'}")
+
+
+def _relatorio_automatico() -> str:
+    """O relatório que o app grava sozinho a partir da resposta do Claude (simulada): PDF com as imagens anexadas."""
+    import json
+
+    class Processo:
+        def communicate(self, entrada=None, timeout=None):
+            resposta = {"status_sugerido": "Aprovado", "resumo": "ok",
+                        "relatorio_markdown": "## Casos executados\n\n| ID | Resultado |\n|---|---|\n| CT-01 | Aprovado |\n"}
+            return json.dumps({"is_error": False, "structured_output": resposta}), ""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = _finalizar_exemplo(Path(tmp))
+        dados = ia_local.gerar_relatorio(pasta, pasta.parent, Path("claude.exe"), abrir_processo=lambda *a, **k: Processo())
+        pdf = Path(dados["caminho_pdf"])
+        if not pdf.read_bytes().startswith(b"%PDF") or not dados["evidencias_anexadas"]:
+            raise AssertionError(f"relatório automático sem PDF ou sem imagens: {dados}")
+    return f"relatório automático em PDF com {dados['evidencias_anexadas']} imagens"
 
 
 def _registro_de_pdfs() -> str:
@@ -214,7 +235,7 @@ VERIFICACOES = (
     ("registro de PDFs", _registro_de_pdfs),
     ("miniaturas e arquivamento", _miniaturas_e_arquivamento),
     ("ciclo de testes e roteiro", _ciclo_de_testes),
-    ("geração automática do roteiro", _geracao_automatica),
+    ("geração automática (roteiro e relatório)", _geracao_automatica),
 )
 
 

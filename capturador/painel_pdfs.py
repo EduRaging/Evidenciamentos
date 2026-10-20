@@ -1,4 +1,4 @@
-"""Aba "Meus testes": um item por teste, com abrir, enviar ao Claude, compartilhar e arquivar."""
+"""Aba "Meus testes": um item por teste, com abrir, gerar o relatório, compartilhar e arquivar."""
 from __future__ import annotations
 
 import os
@@ -33,13 +33,23 @@ def _marca(itens: tuple) -> str:
 
 class PainelPdfs(ttk.Frame):
     def __init__(self, pai: tk.Misc, obter_base: Callable[[], str],
-                 ao_enviar_ao_claude: Callable[[list[Path]], None] | None = None,
-                 ao_criar_ciclo: Callable[[list[Path]], None] | None = None) -> None:
-        """Os dois callbacks recebem as pastas (sem repetir) dos testes selecionados."""
+                 ao_gerar_relatorio: Callable[[list[Path]], None] | None = None,
+                 ao_criar_ciclo: Callable[[list[Path]], None] | None = None,
+                 ao_enviar_manual: Callable[[list[Path]], None] | None = None,
+                 ao_cancelar_relatorio: Callable[[], None] | None = None) -> None:
+        """Os callbacks com lista recebem as pastas (sem repetir) dos testes selecionados.
+
+        `ao_gerar_relatorio` é o caminho normal (o app chama o Claude sozinho); `ao_enviar_manual` abre o Claude desktop
+        com o pedido, só como plano B, no menu Mais.
+        """
         super().__init__(pai, padding=(18, 16, 18, 12))
         self._obter_base = obter_base
-        self._ao_enviar_ao_claude = ao_enviar_ao_claude
+        self._ao_gerar_relatorio = ao_gerar_relatorio
         self._ao_criar_ciclo = ao_criar_ciclo
+        self._ao_enviar_manual = ao_enviar_manual
+        self._ao_cancelar_relatorio = ao_cancelar_relatorio
+        self._gerando: set[Path] = set()  # testes cujo relatório o Claude está montando agora
+        self._mensagem = ""  # último aviso do app (andamento do relatório): a atualização automática não o apaga
         self._testes: list[TesteRegistrado] = []
         self._por_iid: dict[str, TesteRegistrado] = {}
         self._assinatura: tuple | None = None
@@ -61,8 +71,8 @@ class PainelPdfs(ttk.Frame):
         # rodapé primeiro (reserva o espaço); a lista, que cresce, é empacotada por último
         rodape = ttk.Frame(self)
         rodape.pack(fill="x", side="bottom", pady=(10, 0))
-        self.botao_claude = estilo.botao_primario(rodape, "Enviar ao Claude", self.enviar_ao_claude)
-        self.botao_claude.pack(side="left")
+        self.botao_relatorio = estilo.botao_primario(rodape, "Gerar relatório", self.gerar_relatorio)
+        self.botao_relatorio.pack(side="left")
         self.botao_mais = ttk.Button(rodape, text="Mais ▾", command=self._abrir_menu_mais)
         self.botao_mais.pack(side="right")
         self.botao_abrir = ttk.Button(rodape, text="Abrir PDF", command=self.abrir)
@@ -110,9 +120,20 @@ class PainelPdfs(ttk.Frame):
         if self.winfo_ismapped():  # só varre a pasta enquanto a aba está à vista
             self.atualizar()
 
+    def mensagem(self, texto: str) -> None:
+        """Mostra um aviso do app na linha de status (o resumo da lista só volta quando outro aviso o substituir)."""
+        self._mensagem = texto
+        self.var_status.set(texto)
+
+    def marcar_gerando(self, pastas: set[Path] | frozenset[Path]) -> None:
+        """Mostra "…" na coluna do relatório dos testes que o Claude está analisando (vazio = nenhum)."""
+        self._gerando = set(pastas)
+        self._assinatura = None
+        self._mostrar()
+
     def _mostrar(self) -> None:
         visiveis = registro_pdfs.filtrar_testes(self._testes, self.var_filtro.get())
-        assinatura = (self.var_filtro.get().strip(), tuple(
+        assinatura = (self.var_filtro.get().strip(), frozenset(self._gerando), tuple(
             (t.pasta, tuple((p.caminho, p.momento, p.tamanho) for p in t.pdfs)) for t in visiveis))
         if assinatura == self._assinatura:
             return  # nada mudou: a atualização automática não derruba a seleção nem a rolagem
@@ -125,7 +146,7 @@ class PainelPdfs(ttk.Frame):
             self._por_iid[iid] = t
             self.arvore.insert("", "end", iid=iid, values=(
                 t.momento.strftime("%d/%m"), t.teste, SIM if t.evidencias else NAO,
-                _marca(t.relatorios), _marca(t.sugestoes)))
+                "…" if t.pasta in self._gerando else _marca(t.relatorios), _marca(t.sugestoes)))
             if t.pasta in anteriores:
                 self.arvore.selection_add(iid)
         total, mostrados = len(self._testes), len(visiveis)
@@ -141,7 +162,8 @@ class PainelPdfs(ttk.Frame):
                 texto = f"Nenhum teste encontrado para “{self.var_filtro.get().strip()}”."
             self._vazio.configure(text=texto)
             self._vazio.pack(fill="both", expand=True)
-        if not self.var_status.get().startswith(("Arquivo", "Caminho", "Cópia", "E-mail", "Arquivado", "Abrindo")):
+        if not (self.var_status.get().startswith(("Arquivo", "Caminho", "Cópia", "E-mail", "Arquivado", "Abrindo"))
+                or self.var_status.get() == self._mensagem):
             self.var_status.set(self._resumo(total, mostrados))
         self._atualizar_botoes()
 
@@ -169,9 +191,12 @@ class PainelPdfs(ttk.Frame):
         marcados = self._selecionados()
         um = self._selecionado()
         n = len(marcados)
-        ligado = bool(marcados) and self._ao_enviar_ao_claude is not None
-        estilo.ativar(self.botao_claude, ligado)
-        self.botao_claude.configure(text="Enviar ao Claude" if n <= 1 else f"Enviar ao Claude  ·  {n} testes")
+        if self._gerando:  # enquanto o Claude trabalha, o botão principal passa a cancelar
+            estilo.ativar(self.botao_relatorio, self._ao_cancelar_relatorio is not None)
+            self.botao_relatorio.configure(text="Cancelar relatório")
+        else:
+            estilo.ativar(self.botao_relatorio, bool(marcados) and self._ao_gerar_relatorio is not None)
+            self.botao_relatorio.configure(text="Gerar relatório" if n <= 1 else f"Gerar relatório  ·  {n} testes")
         self.botao_abrir.state(["!disabled"] if um and um.principal else ["disabled"])
         self.botao_mais.state(["!disabled"] if marcados else ["disabled"])
 
@@ -181,13 +206,14 @@ class PainelPdfs(ttk.Frame):
         menu = tk.Menu(self, tearoff=False)
         marcados = self._selecionados()
         um = self._selecionado()
-        if self._ao_enviar_ao_claude is not None and marcados:
-            menu.add_command(label="Enviar ao Claude para analisar…" if len(marcados) == 1
-                             else f"Enviar ao Claude para analisar {len(marcados)} testes…",
-                             command=self.enviar_ao_claude)
+        if self._ao_gerar_relatorio is not None and marcados:
+            menu.add_command(label="Gerar relatório" if len(marcados) == 1 else f"Gerar relatório de {len(marcados)} testes",
+                             command=self.gerar_relatorio, state="disabled" if self._gerando else "normal")
             if self._ao_criar_ciclo is not None:
                 menu.add_command(label="Criar ciclo de testes com " + ("este teste…" if len(marcados) == 1 else "estes testes…"),
                                  command=self.criar_ciclo)
+            if self._ao_enviar_manual is not None:
+                menu.add_command(label="Pedir a análise no Claude desktop (manual)…", command=self.enviar_manual)
             menu.add_separator()
         if um is not None:
             if len(um.pdfs) == 1:
@@ -226,12 +252,21 @@ class PainelPdfs(ttk.Frame):
             self._menu_para_selecao().tk_popup(evento.x_root, evento.y_root)
 
     # --- ações --------------------------------------------------------
-    def enviar_ao_claude(self) -> None:
-        """Entrega ao app as pastas dos testes selecionados, para montar o prompt e abrir o Claude."""
-        pastas = self._pastas_selecionadas()
-        if not pastas or self._ao_enviar_ao_claude is None:
+    def gerar_relatorio(self) -> None:
+        """Entrega ao app as pastas dos testes selecionados, para o Claude montar o relatório sozinho (ou cancela, se já está gerando)."""
+        if self._gerando:
+            if self._ao_cancelar_relatorio is not None:
+                self._ao_cancelar_relatorio()
             return
-        self._ao_enviar_ao_claude(pastas)
+        pastas = self._pastas_selecionadas()
+        if pastas and self._ao_gerar_relatorio is not None:
+            self._ao_gerar_relatorio(pastas)
+
+    def enviar_manual(self) -> None:
+        """Plano B: abre o Claude desktop com o pedido de análise preenchido para os testes selecionados."""
+        pastas = self._pastas_selecionadas()
+        if pastas and self._ao_enviar_manual is not None:
+            self._ao_enviar_manual(pastas)
 
     def criar_ciclo(self) -> None:
         """Cria um ciclo de testes tendo os testes selecionados como telas de referência."""

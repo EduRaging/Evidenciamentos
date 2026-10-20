@@ -1,9 +1,9 @@
-"""O app chama o Claude Code deste computador, sozinho, para montar o roteiro (sem chave de API).
+"""O app chama o Claude Code deste computador, sozinho, para montar o roteiro e o relatório (sem chave de API).
 
 O Claude Code roda em modo NÃO interativo e RESTRITO: só a ferramenta Read, numa pasta de trabalho
 temporária com cópias REDUZIDAS das telas (nada mais), sem MCP, sem skills, sem ler as configurações do
 usuário, e tudo o que pediria permissão é negado. A IA só devolve um JSON: quem valida e grava o roteiro
-é o app. Usa o login do Claude Code do próprio usuário (`claude auth login`, uma vez).
+ou o relatório é o app. Usa o login do Claude Code do próprio usuário (`claude auth login`, uma vez).
 """
 from __future__ import annotations
 
@@ -19,11 +19,12 @@ from typing import Callable
 
 from PIL import Image
 
-from . import ciclos, fluxo_ciclo
+from . import ciclos, fluxo_ciclo, gravacao, metadados
 from .ciclos import Ciclo
 from .imagens import abrir_png
 from .metadados import PastaTeste
 from .prompt_ciclo import montar_prompt_roteiro_local
+from .prompt_ia import STATUS_SUGERIDOS, montar_prompt_relatorio_local
 
 LADO_MAXIMO = 1568  # px, como na extensão: acima disso a IA reduz de qualquer jeito e só custa mais
 MAX_IMAGENS = 40  # por pedido; com vários testes, cada um entra com algumas telas espaçadas
@@ -35,7 +36,7 @@ NOVO_CONSOLE = 0x00000010  # CREATE_NEW_CONSOLE
 
 
 class ErroIA(Exception):
-    """Falha ao gerar o roteiro; a mensagem já é para o usuário."""
+    """Falha ao gerar o roteiro ou o relatório; a mensagem já é para o usuário."""
 
 
 class NaoLogado(ErroIA):
@@ -71,7 +72,7 @@ def localizar_claude(raizes: list[Path] | None = None) -> Path | None:
 def esta_logado(exe: Path, executar: Callable = subprocess.run) -> bool:
     """`claude auth status` diz se há uma conta conectada. Qualquer dúvida conta como "não"."""
     try:
-        r = executar([str(exe), "auth", "status"], capture_output=True, text=True, encoding="utf-8", timeout=30,
+        r = executar([str(exe), "auth", "status"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                      creationflags=SEM_JANELA)
         return bool(json.loads(r.stdout).get("loggedIn"))
     except (OSError, ValueError, subprocess.SubprocessError, AttributeError):
@@ -160,9 +161,18 @@ ESQUEMA_ROTEIRO = {
 }
 
 
-def montar_comando(exe: Path, orcamento: float = ORCAMENTO_USD) -> list[str]:
+ESQUEMA_RELATORIO = {
+    "type": "object",
+    "properties": {"status_sugerido": {"type": "string", "enum": list(STATUS_SUGERIDOS)}, "resumo": _TEXTO,
+                   "relatorio_markdown": _TEXTO},
+    "required": ["status_sugerido", "relatorio_markdown"],
+}
+
+
+def montar_comando(exe: Path, orcamento: float = ORCAMENTO_USD, esquema: dict | None = None) -> list[str]:
     """A linha de comando do Claude Code: não interativo, só Read, restrito, sem MCP nem skills, sem sessão salva."""
-    return [str(exe), "-p", "--output-format", "json", "--json-schema", json.dumps(ESQUEMA_ROTEIRO, ensure_ascii=False),
+    esquema = ESQUEMA_ROTEIRO if esquema is None else esquema
+    return [str(exe), "-p", "--output-format", "json", "--json-schema", json.dumps(esquema, ensure_ascii=False),
             "--tools", "Read", "--allowedTools", "Read", "--permission-mode", "dontAsk", "--permission-prompts", "none",
             "--restricted", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence",
             "--max-budget-usd", f"{orcamento:g}"]
@@ -182,7 +192,7 @@ def _json_do_texto(texto: str):
 
 
 def extrair_resposta(saida: str) -> dict:
-    """O objeto do roteiro dentro da saída `--output-format json` do Claude Code. ErroIA/NaoLogado se não houver."""
+    """O objeto (roteiro ou relatório) dentro da saída `--output-format json` do Claude Code. ErroIA/NaoLogado se não houver."""
     try:
         dados = json.loads(saida)
     except (ValueError, TypeError) as exc:
@@ -200,9 +210,9 @@ def extrair_resposta(saida: str) -> dict:
     try:
         achado = _json_do_texto(texto)
     except (ValueError, TypeError) as exc:
-        raise ErroIA("A resposta do Claude não veio no formato do roteiro; tente de novo.") from exc
+        raise ErroIA("A resposta do Claude não veio no formato esperado; tente de novo.") from exc
     if not isinstance(achado, dict):
-        raise ErroIA("A resposta do Claude não veio no formato do roteiro; tente de novo.")
+        raise ErroIA("A resposta do Claude não veio no formato esperado; tente de novo.")
     return achado
 
 
@@ -223,14 +233,15 @@ class Controle:
 
 
 def executar(exe: Path, prompt: str, pasta_de_trabalho: Path, controle: Controle | None = None,
-             abrir_processo: Callable = subprocess.Popen, tempo_limite: float = TEMPO_LIMITE_S) -> dict:
-    """Roda o Claude Code com o `prompt` (pela entrada padrão) na pasta de trabalho e devolve o objeto do roteiro."""
+             abrir_processo: Callable = subprocess.Popen, tempo_limite: float = TEMPO_LIMITE_S,
+             esquema: dict | None = None) -> dict:
+    """Roda o Claude Code com o `prompt` (pela entrada padrão) na pasta de trabalho e devolve o objeto que ele responde."""
     controle = controle or Controle()
     if controle.cancelado:
         raise Cancelado("Geração cancelada.")
     try:
-        processo = abrir_processo(montar_comando(exe), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE, cwd=str(pasta_de_trabalho), text=True, encoding="utf-8",
+        processo = abrir_processo(montar_comando(exe, esquema=esquema), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, cwd=str(pasta_de_trabalho), text=True, encoding="utf-8", errors="replace",
                                   creationflags=SEM_JANELA)
     except OSError as exc:
         raise ErroIA("Não consegui iniciar o Claude Code deste computador.") from exc
@@ -271,3 +282,45 @@ def gerar_roteiro(ciclo: Ciclo, base: Path | str, exe: Path, controle: Controle 
     except ValueError as exc:
         raise ErroIA(f"O roteiro devolvido pelo Claude não passou na validação do app: {exc}") from exc
     return arquivo, len(casos)
+
+
+def _teste_da_base(pasta: Path | str, base: Path | str) -> PastaTeste:
+    """O teste em `pasta`, só se for mesmo uma pasta de teste direto dentro de `base` (nada de atalhos nem pastas de trabalho)."""
+    pasta, base = Path(pasta), Path(base)
+    mesma_pasta = os.path.normcase(os.path.abspath(pasta.parent)) == os.path.normcase(os.path.abspath(base))
+    if pasta.name.startswith(("_", ".")) or not mesma_pasta or not pasta.is_dir() or _e_atalho(pasta):
+        raise ErroIA("Este teste não está na pasta de evidências configurada.")
+    try:
+        teste = metadados.ler(pasta.resolve())  # resolvida: é com ela que gravacao confere onde estão as imagens
+    except (OSError, ValueError) as exc:
+        raise ErroIA(f"Não consegui ler o teste: {exc}") from exc
+    if not teste.evidencias:
+        raise ErroIA("Este teste não tem imagens de evidência para o Claude analisar.")
+    return teste
+
+
+def gerar_relatorio(pasta: Path | str, base: Path | str, exe: Path, controle: Controle | None = None,
+                    abrir_processo: Callable = subprocess.Popen, tempo_limite: float = TEMPO_LIMITE_S) -> dict:
+    """Gera sozinho o relatório do teste em `pasta` e o grava em PDF na própria pasta. Devolve os dados do arquivo.
+
+    As telas vão como cópias reduzidas numa pasta temporária, apagada no fim. A IA devolve só o texto: o app põe a
+    capa, anexa as imagens e grava o PDF (nunca sobrescreve). Levanta ErroIA com a explicação.
+    """
+    teste = _teste_da_base(pasta, base)
+    with tempfile.TemporaryDirectory(prefix="capt_ia_") as tmp:
+        mapa = preparar_pasta_de_trabalho([teste], Path(tmp))
+        if not mapa:
+            raise ErroIA("Não consegui preparar as telas do teste para enviar.")
+        subpasta, (_nome, telas) = next(iter(mapa.items()))
+        bruto = executar(exe, montar_prompt_relatorio_local(teste, telas, subpasta), Path(tmp), controle,
+                         abrir_processo, tempo_limite, esquema=ESQUEMA_RELATORIO)
+    texto = bruto.get("relatorio_markdown")
+    if not isinstance(texto, str) or not texto.strip():
+        raise ErroIA("O Claude não devolveu o texto do relatório; tente de novo.")
+    status = bruto.get("status_sugerido")
+    status = status if status in STATUS_SUGERIDOS else "Inconclusivo"
+    texto = f"**Status sugerido pela IA:** {status} (a decisão final é do testador).\n\n{texto.strip()}\n"
+    try:
+        return gravacao.gravar_relatorio_pdf(teste, f"Relatório de testes - {teste.nome_teste}", texto, True)
+    except ValueError as exc:
+        raise ErroIA(f"Não consegui gravar o relatório: {exc}") from exc

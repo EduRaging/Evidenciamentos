@@ -56,7 +56,7 @@ O atalho aponta para esta pasta; se o projeto for movido, apague-o e rode o `Ini
 
 A segunda aba da janela principal lista **um item por teste** da pasta de evidências, do mais
 recente para o mais antigo, com a data, o nome e um ✓ em cada tipo de PDF: **Evid.** (o PDF de
-evidências, que o app gera ao finalizar), **Relat.** (o relatório de testes que o Claude grava pela
+evidências, que o app gera ao finalizar), **Relat.** (o relatório de testes que o Claude gera, sozinho ou pela
 extensão) e **Sug.** (as sugestões de casos de teste, também do Claude); "✓ 2" quando há mais de
 um do mesmo tipo. A lista se atualiza sozinha enquanto a aba está à vista (a cada ~6 s), mantendo a seleção,
 então um relatório criado por fora aparece sem fazer nada. O campo de busca ignora acentos e
@@ -66,7 +66,7 @@ Só dois botões ficam à vista, e o resto está em **Mais ▾** (ou no clique d
 
 | Botão / ação | O que faz |
 |---|---|
-| **Enviar ao Claude** | abre a janela do prompt para os testes selecionados (veja abaixo) |
+| **Gerar relatório** | o app pede o relatório ao Claude **sozinho** e grava o PDF na pasta do teste (veja abaixo); enquanto trabalha, o botão vira **Cancelar relatório** |
 | **Abrir PDF** | abre o relatório mais recente do teste (ou o de evidências, se não houver relatório; as sugestões nunca abrem por aqui); também com dois cliques ou Enter |
 | **Mais ▾ › Evidências / Relatório / Sugestões** | para cada PDF do teste: Abrir, **Copiar arquivo** (cole com Ctrl+V num e-mail, no Teams ou numa pasta), **Salvar cópia…**, **Enviar por e-mail…** e Copiar caminho |
 | **Mais ▾ › Mostrar a pasta do teste** | abre o Explorador de Arquivos com o PDF selecionado |
@@ -76,16 +76,22 @@ Só dois botões ficam à vista, e o resto está em **Mais ▾** (ou no clique d
 O padrão de e-mail do Windows (`mailto:`) não permite anexar arquivos, por isso o anexo é feito
 colando o PDF já copiado.
 
-**Enviar ao Claude** — com **Ctrl** ou **Shift** o senhor seleciona **vários testes** (até 12 por
-vez). O Claude lê as **imagens** da pasta de cada teste pela extensão (não o conteúdo dos PDFs). O
-prompt pede **um relatório por teste, salvo na pasta do próprio teste** (não um consolidado, e com
-as sugestões num segundo PDF, veja abaixo), um teste por vez, e ao final uma tabela com o status
-sugerido e o caminho de cada PDF. Os detalhes
-(sistema/ambiente, objetivo, critérios e observações) valem para todos os testes selecionados.
-Testes sem imagens são ignorados com aviso. Com vários testes só existe o modo "Claude com a
-extensão" (com anexos não dá para misturar testes), e o Claude pode pedir permissão para gravar
-cada PDF (dois por teste, com as sugestões ligadas). Se o texto não couber no limite de ~12 mil caracteres do link, o app copia o prompt
-para colar.
+**Gerar relatório** — por baixo dos panos: não abre o Claude desktop, não mostra prompt e não pede
+Enter. Com **Ctrl** ou **Shift** o senhor seleciona **vários testes** (até 12 por vez); o app os
+analisa **um de cada vez**, e a coluna **Relat.** mostra "…" no teste em andamento. O app chama o
+Claude Code deste computador do mesmo jeito restrito dos ciclos (veja "Como o app chama o Claude",
+na seção Ciclos): só a ferramenta `Read`, numa pasta temporária com **cópias reduzidas das telas** do
+teste (no máximo 40), sem MCP nem skills. A IA devolve **só o texto** (os casos executados, o
+relatório de execução e o **status sugerido**: Aprovado, Reprovado ou Inconclusivo); **quem põe a
+capa, anexa as imagens e grava o PDF é o app**, na pasta do próprio teste (`Relatório de testes -
+<teste>.pdf` e o `.md`; nunca sobrescreve, o segundo vira `(2)`). O senhor vê só o andamento na linha
+de status, um aviso no canto da tela ao terminar e o PDF na lista. Testes sem imagens são ignorados
+com aviso. A autorização e o login são os mesmos dos ciclos (uma vez só).
+
+Esta versão gera **um PDF por teste, sem o PDF de sugestões nem a avaliação de automação**: as
+sugestões de casos passam a vir no roteiro do ciclo. O caminho antigo (abrir o Claude desktop com o
+pedido, com todas as opções) continua em **Mais ▾ › Pedir a análise no Claude desktop (manual)…**,
+descrito em "Prompt para IA".
 
 ## A janela "Capturar"
 
@@ -95,7 +101,7 @@ convite em vez de uma tabela vazia. Duplo clique (ou Enter) abre a imagem; **Del
 direito) remove a selecionada. A ação principal é **Finalizar teste**, que mostra quantas
 evidências entram e só liga quando há ao menos uma; **Descartar** e **Configurações** são
 secundárias. Ao finalizar, a janela de conclusão oferece **Criar ciclo de testes** como ação principal
-(veja a próxima seção) e, ao lado, **Relatório com o Claude…**.
+(veja a próxima seção) e, ao lado, **Gerar relatório** (o app pede ao Claude e grava o PDF sozinho).
 
 ## Ciclos de teste (o roteirizador)
 
@@ -121,11 +127,13 @@ app valida e grava** o roteiro (a IA não escreve arquivo nenhum). Não usa chav
 Claude Code** do senhor, que precisa estar conectada **uma vez** (`claude auth login`; o app oferece
 abrir o login na primeira vez).
 
-**Autorização.** As telas **saem do computador** nesse momento. Na primeira geração o app pergunta se
-pode enviá-las (e lembra de dados sensíveis e da política da empresa); a resposta fica salva e dá para
-**revogá-la** em **Mais ▾**. Sem a autorização, sem o Claude Code ou sem o login, nada é enviado e o
-app oferece o plano B: **Pedir o roteiro no Claude desktop (manual)**, que abre o pedido preenchido e
-exige o Enter do senhor (e a extensão, veja abaixo).
+**Autorização.** As telas **saem do computador** nesse momento. Na primeira geração (de roteiro ou de
+relatório) o app pergunta se pode enviá-las (e lembra de dados sensíveis e da política da empresa); a
+resposta fica salva, vale para as duas coisas, e dá para **revogá-la** em **Mais ▾**. Sem a
+autorização, sem o Claude Code ou sem o login, **nada é enviado e o app só explica o que falta**: ele
+não abre o Claude desktop por conta própria. O plano B fica à escolha do senhor, em **Mais ▾ › Pedir o
+roteiro no Claude desktop (manual)**, que abre o pedido preenchido e exige o Enter (e a extensão,
+veja abaixo).
 
 **O que o Claude entrega**, no padrão do CTFL 4.0 (o programa do BSTQB):
 - **Casos de teste** atômicos, cada um com ID (CT-01…), título, objetivo, **técnica** (partição de
@@ -151,11 +159,12 @@ de propósito: o registro de testes e a leitura do Claude a ignoram.
 gravar e de novo ao ler** (tipos, tamanhos, IDs únicos, textos de uma linha sem caracteres de controle
 ou de direção, nomes de pasta simples); um roteiro adulterado é pulado, e nada inválido é gravado.
 Como a IA só tem `Read` numa pasta com imagens, texto escondido numa tela no máximo distorce o roteiro:
-não alcança arquivos, comandos nem a rede. **Atenção à rede:** neste fluxo o app **inicia um processo
-(o Claude Code) que se conecta à Anthropic**; a medição de "zero conexões externas" abaixo vale para o
-app e a extensão sem esse fluxo, e a TI precisa saber disso. O modo restrito foi aceito pelo Claude Code
-instalado (versão 2.1.299), mas o caminho de sucesso real depende do login do senhor e **ainda não foi
-exercitado com o Claude de verdade**.
+não alcança arquivos, comandos nem a rede. **Atenção à rede:** nestes fluxos (o roteiro e o **Gerar
+relatório** de Meus testes) o app **inicia um processo (o Claude Code) que se conecta à Anthropic**; a
+medição de "zero conexões externas" abaixo vale para o app e a extensão sem esses fluxos, e a TI precisa
+saber disso. O modo restrito foi aceito pelo Claude Code instalado (versão 2.1.299), mas o caminho de
+sucesso real depende do login do senhor e **ainda não foi exercitado com o Claude de verdade** (só com
+um Claude Code simulado, que exercita a janela, as threads, a validação e a gravação do PDF).
 
 **Plano B (manual) e a extensão.** Pelo Claude desktop, a extensão ganhou a ferramenta `salvar_casos`,
 que só grava `roteiro-NNN.json` dentro de `_ciclos\<ciclo>`, só em pasta com `ciclo.json` válido, com
@@ -165,14 +174,17 @@ extensão** (`dist\CapturadorEvidencias.mcpb`); se a instalada for antiga, o app
 **Próximas etapas (ainda não feitas):** execução guiada do ciclo (passo a passo, com a evidência
 ligada ao passo e o resultado de cada caso), relatório de execução do ciclo com a checagem dos
 critérios de saída e as métricas do CTFL.
-## Prompt para IA (casos de teste e relatório)
+## Plano B: prompt para IA (casos de teste e relatório, manual)
 
-O app não se conecta a nenhuma IA: ele monta um **prompt pronto** para o senhor enviar ao Claude
-desktop (um clique abre a conversa com o texto preenchido) ou colar na IA que preferir (e que a
-empresa aprove). Sem chave de API e sem custo, e sem tráfego de rede do app (a exceção é a geração automática do roteiro dos ciclos, que usa o Claude Code; veja a seção Ciclos).
+O caminho normal é automático (**Gerar relatório** e os ciclos, descritos acima). Esta seção é o
+**plano B manual**, em **Meus testes › Mais ▾ › Pedir a análise no Claude desktop (manual)…**: o app
+monta um **prompt pronto** para o senhor enviar ao Claude desktop (um clique abre a conversa com o
+texto preenchido) ou colar na IA que preferir (e que a empresa aprove). Aqui o app não conversa com
+nenhuma IA e não gera tráfego de rede; quem envia é o senhor, com o Enter. É o único caminho que
+oferece as sugestões em PDF à parte, a avaliação de automação e os detalhes do teste.
 
-1. Ao finalizar um teste, clique em **Enviar ao Claude…** (ou, na aba **Meus testes**, selecione o(s)
-   teste(s) e use **Enviar ao Claude**; na janela do prompt, **Trocar…** escolhe outro teste).
+1. Em **Meus testes**, selecione o(s) teste(s) e use **Mais ▾ › Pedir a análise no Claude desktop
+   (manual)…** (na janela do prompt, **Trocar…** escolhe outro teste).
 2. A janela abre **só com o essencial**: o(s) teste(s), uma linha-resumo do que o Claude vai gerar
    e o botão **Enviar ao Claude** (mais **Copiar prompt**). O resto fica recolhido e abrir uma
    seção fecha as outras: **Alterar** (as opções abaixo), **Adicionar detalhes do teste** (sistema/

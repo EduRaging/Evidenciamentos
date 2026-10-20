@@ -9,7 +9,7 @@ import tkinter as tk
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 from . import (atalhos, captura, ciclos, claude_desktop, config, estilo, extensao_claude, fluxo_ciclo, ia_local,
                miniaturas, recursos, roteiro_md, winutil)
@@ -19,6 +19,7 @@ from .dialogo_prompt import abrir_dialogo_prompt, ler_testes
 from .dialogos import abrir_configuracoes
 from .painel_ciclos import PainelCiclos
 from .painel_pdfs import PainelPdfs
+from .prompt_ia import MAX_TESTES
 from .sessao import ROTULOS, Sessao
 from .visualizador_roteiro import abrir_visualizador
 
@@ -32,6 +33,7 @@ class App:
         self._fila: queue.Queue[str] = queue.Queue()
         self._ocupado = False
         self._gerando: dict[Path, ia_local.Controle] = {}  # roteiros que o Claude está montando agora
+        self._lote: dict | None = None  # relatórios que o Claude está montando agora (um lote por vez)
         self._fila_ia: queue.Queue = queue.Queue()  # resultados das gerações (vêm de outra thread)
         self.atalhos = atalhos.GerenciadorAtalhos(self._fila.put)
 
@@ -68,8 +70,9 @@ class App:
         self.abas.pack(fill="both", expand=True)
         quadro = ttk.Frame(self.abas, padding=(18, 16, 18, 12))
         self.abas.add(quadro, text="  Capturar  ")
-        self.painel_pdfs = PainelPdfs(self.abas, lambda: self.cfg.pasta_base, self._analisar_varios,
-                                      self._criar_ciclo_automatico)
+        self.painel_pdfs = PainelPdfs(self.abas, lambda: self.cfg.pasta_base, self._gerar_relatorios,
+                                      self._criar_ciclo_automatico, self._analisar_varios_manual,
+                                      self._cancelar_relatorios)
         self.abas.add(self.painel_pdfs, text="  Meus testes  ")
         self.painel_ciclos = PainelCiclos(self.abas, lambda: self.cfg.pasta_base, self._novo_ciclo, self._gerar_roteiro,
                                           self._ver_roteiro, self._salvar_pdf_roteiro, self._gerar_roteiro_manual,
@@ -286,7 +289,7 @@ class App:
         config.salvar(self.cfg)
 
     def _dialogo_concluido(self, pasta: Path) -> None:
-        """Aviso de teste finalizado com os próximos passos (abrir a pasta ou preparar o prompt)."""
+        """Aviso de teste finalizado com os próximos passos (criar o ciclo, gerar o relatório ou abrir a pasta)."""
         janela = tk.Toplevel(self.raiz)
         janela.title("Teste finalizado")
         janela.transient(self.raiz)
@@ -306,7 +309,7 @@ class App:
             janela.destroy()
 
         estilo.botao_primario(botoes, "Criar ciclo de testes", lambda: fechar("ciclo")).pack(side="left")
-        ttk.Button(botoes, text="Relatório com o Claude…", command=lambda: fechar("prompt")).pack(side="left", padx=(10, 0))
+        ttk.Button(botoes, text="Gerar relatório", command=lambda: fechar("relatorio")).pack(side="left", padx=(10, 0))
         ttk.Button(botoes, text="Abrir pasta", command=lambda: fechar("pasta")).pack(side="left", padx=(10, 0))
         ttk.Button(botoes, text="Fechar", command=fechar).pack(side="right")
         janela.protocol("WM_DELETE_WINDOW", fechar)
@@ -317,34 +320,13 @@ class App:
         acao = escolha[0] if escolha else ""
         if acao == "pasta":
             os.startfile(pasta)
-        elif acao == "prompt":
-            self._preparar_prompt(pasta)
+        elif acao == "relatorio":
+            self._gerar_relatorios([pasta])
         elif acao == "ciclo":
             self._criar_ciclo_automatico([pasta])
 
-    def _preparar_prompt(self, pasta: Path | None = None) -> None:
-        """Abre a janela do prompt de IA para `pasta` (padrão: o último teste finalizado)."""
-        if pasta is None:
-            ultima = Path(self.cfg.ultima_pasta) if self.cfg.ultima_pasta else None
-            if ultima and ultima.is_dir():
-                pasta = ultima
-            else:
-                base = Path(self.cfg.pasta_base)
-                escolhida = filedialog.askdirectory(
-                    parent=self.raiz, initialdir=str(base) if base.is_dir() else None,
-                    title="Escolha a pasta do teste")
-                if not escolhida:
-                    return
-                pasta = Path(escolhida)
-        try:
-            usada = abrir_dialogo_prompt(self.raiz, pasta, self.cfg.pasta_base)
-        except ValueError as exc:
-            messagebox.showwarning("Pasta inválida", str(exc), parent=self.raiz)
-            return
-        self._lembrar_pasta(usada)
-
-    def _analisar_varios(self, pastas: list[Path]) -> None:
-        """Abre a janela do prompt para os testes escolhidos na aba "PDFs gerados"."""
+    def _analisar_varios_manual(self, pastas: list[Path]) -> None:
+        """Plano B: abre a janela do prompt (e o Claude desktop) para os testes escolhidos em Meus testes."""
         testes, ignorados = ler_testes(pastas)
         if ignorados:
             lista = "\n".join(f"• {nome}" for nome, _motivo in ignorados)
@@ -355,9 +337,11 @@ class App:
         if not testes:
             return
         try:
-            abrir_dialogo_prompt(self.raiz, [t.pasta for t in testes], self.cfg.pasta_base)
+            usada = abrir_dialogo_prompt(self.raiz, [t.pasta for t in testes], self.cfg.pasta_base)
         except ValueError as exc:
             messagebox.showwarning("Não foi possível preparar o envio", str(exc), parent=self.raiz)
+            return
+        self._lembrar_pasta(usada)
 
     # --- ciclos de teste ----------------------------------------------
     def _criar_ciclo_automatico(self, pastas: list[Path]) -> None:
@@ -384,23 +368,32 @@ class App:
         self.painel_ciclos.selecionar(ciclo.pasta)
         self._gerar_roteiro(ciclo)
 
+    def _pronto_para_ia(self, status, telas: int, o_que: str) -> Path | None:
+        """Confere o Claude Code, a autorização e o login. Devolve o executável, ou None (com a explicação em `status`)."""
+        exe = ia_local.localizar_claude()
+        if exe is None:
+            status("Não achei o Claude Code neste computador (ele vem junto com o Claude desktop: abra o Claude desktop "
+                   "uma vez e tente de novo). Em Mais ▾ há o pedido manual no Claude desktop.")
+            return None
+        if not self._autorizou_envio(telas, o_que):
+            status("Não enviado: sem a autorização para mandar as telas ao Claude. Em Mais ▾ há o pedido manual "
+                   "no Claude desktop.")
+            return None
+        if not ia_local.esta_logado(exe):
+            self._oferecer_login(exe, status)
+            return None
+        return exe
+
     def _gerar_roteiro(self, ciclo) -> None:
         """Gera o roteiro SOZINHO: o app chama o Claude Code deste computador, valida o que volta e grava."""
         painel = self.painel_ciclos
         if ciclo.pasta in self._gerando:
             painel.var_status.set("O roteiro deste ciclo já está sendo gerado.")
             return
-        exe = ia_local.localizar_claude()
+        testes, _ = fluxo_ciclo.testes_de_referencia(ciclo, self.cfg.pasta_base)
+        telas = min(ia_local.MAX_IMAGENS, sum(len(t.evidencias) for t in testes))
+        exe = self._pronto_para_ia(painel.var_status.set, telas, "os dados do ciclo (nome, objetivo, escopo)")
         if exe is None:
-            painel.var_status.set("Não achei o Claude Code neste computador: abrindo o pedido no Claude desktop.")
-            self._gerar_roteiro_manual(ciclo)
-            return
-        if not self._autorizou_envio(ciclo):
-            painel.var_status.set("Roteiro não gerado: sem a autorização para enviar as telas ao Claude. "
-                                  "Em Mais ▾ há o pedido manual no Claude desktop.")
-            return
-        if not ia_local.esta_logado(exe):
-            self._oferecer_login(exe)
             return
         controle = ia_local.Controle()
         self._gerando[ciclo.pasta] = controle
@@ -412,32 +405,93 @@ class App:
         def trabalho() -> None:  # thread: nada de Tk aqui, só devolve o resultado pela fila
             try:
                 _, casos = ia_local.gerar_roteiro(ciclo, base, exe, controle)
-                self._fila_ia.put(("ok", ciclo, casos, ""))
+                self._fila_ia.put(("roteiro", "ok", ciclo, casos, ""))
             except ia_local.Cancelado:
-                self._fila_ia.put(("cancelado", ciclo, 0, ""))
+                self._fila_ia.put(("roteiro", "cancelado", ciclo, 0, ""))
             except ia_local.NaoLogado as exc:
-                self._fila_ia.put(("nao_logado", ciclo, 0, str(exc)))
+                self._fila_ia.put(("roteiro", "nao_logado", ciclo, 0, str(exc)))
             except ia_local.ErroIA as exc:
-                self._fila_ia.put(("erro", ciclo, 0, str(exc)))
+                self._fila_ia.put(("roteiro", "erro", ciclo, 0, str(exc)))
             except Exception as exc:  # noqa: BLE001 - qualquer falha precisa chegar ao usuário, não morrer na thread
                 log.exception("Falha inesperada ao gerar o roteiro")
-                self._fila_ia.put(("erro", ciclo, 0, f"Falha inesperada: {exc}"))
+                self._fila_ia.put(("roteiro", "erro", ciclo, 0, f"Falha inesperada: {exc}"))
 
         threading.Thread(target=trabalho, daemon=True, name="gerar-roteiro").start()
 
-    def _autorizou_envio(self, ciclo) -> bool:
+    # --- relatório de execução: o app chama o Claude sozinho e grava o PDF na pasta do teste
+    def _status_relatorio(self, texto: str) -> None:
+        self.painel_pdfs.mensagem(texto)
+        self._status(texto)
+
+    def _gerar_relatorios(self, pastas: list[Path]) -> None:
+        """Gera SOZINHO o relatório em PDF de cada teste, um de cada vez; o usuário só vê o andamento e o resultado."""
+        if self._lote is not None:
+            self._status_relatorio("Já há relatórios sendo gerados.")
+            return
+        if len(pastas) > MAX_TESTES:
+            messagebox.showwarning("Testes demais", f"Selecione no máximo {MAX_TESTES} testes por vez "
+                                   f"(foram {len(pastas)}).", parent=self.raiz)
+            return
+        testes, ignorados = ler_testes(pastas)
+        if ignorados:
+            lista = "\n".join(f"• {nome}" for nome, _motivo in ignorados)
+            messagebox.showinfo(
+                "Testes ignorados",
+                "Estes testes não têm imagens de evidência que o Claude possa analisar (ou o registro "
+                f"evidencias.json está inválido), então ficaram de fora:\n\n{lista}", parent=self.raiz)
+        if not testes:
+            return
+        telas = min(ia_local.MAX_IMAGENS, sum(len(t.evidencias) for t in testes))
+        exe = self._pronto_para_ia(self._status_relatorio, telas, "o nome, o testador e as datas dos testes")
+        if exe is None:
+            return
+        controle = ia_local.Controle()
+        self._lote = {"controle": controle, "pendentes": {t.pasta for t in testes}, "prontos": 0, "falhas": [],
+                      "nao_logado": False, "total": len(testes)}
+        self.painel_pdfs.marcar_gerando(self._lote["pendentes"])
+        self._status_relatorio(f"O Claude está analisando {'o teste' if len(testes) == 1 else f'{len(testes)} testes'}…"
+                               " pode levar alguns minutos; o app continua livre para capturar.")
+        base = self.cfg.pasta_base
+
+        def trabalho() -> None:  # thread: nada de Tk aqui, só devolve o resultado pela fila
+            for i, teste in enumerate(testes, 1):
+                if controle.cancelado:
+                    break
+                self._fila_ia.put(("relatorio", "andamento", teste, i, ""))
+                try:
+                    dados = ia_local.gerar_relatorio(teste.pasta, base, exe, controle)
+                    self._fila_ia.put(("relatorio", "ok", teste, dados, ""))
+                except ia_local.Cancelado:
+                    break
+                except ia_local.NaoLogado as exc:
+                    self._fila_ia.put(("relatorio", "nao_logado", teste, None, str(exc)))
+                    break
+                except ia_local.ErroIA as exc:
+                    self._fila_ia.put(("relatorio", "erro", teste, None, str(exc)))
+                except Exception as exc:  # noqa: BLE001 - qualquer falha precisa chegar ao usuário, não morrer na thread
+                    log.exception("Falha inesperada ao gerar o relatório")
+                    self._fila_ia.put(("relatorio", "erro", teste, None, f"Falha inesperada: {exc}"))
+            self._fila_ia.put(("relatorio", "fim", None, None, ""))
+
+        threading.Thread(target=trabalho, daemon=True, name="gerar-relatorio").start()
+
+    def _cancelar_relatorios(self) -> None:
+        if self._lote is not None:
+            self._lote["controle"].cancelar()
+            self._status_relatorio("Cancelando a geração do relatório…")
+
+    def _autorizou_envio(self, telas: int, o_que: str) -> bool:
         """Pede (uma vez) a autorização de enviar as telas ao Claude; a resposta fica salva."""
         if self.cfg.autorizou_envio_ia:
             return True
-        testes, _ = fluxo_ciclo.testes_de_referencia(ciclo, self.cfg.pasta_base)
-        telas = min(ia_local.MAX_IMAGENS, sum(len(t.evidencias) for t in testes))
         if not messagebox.askyesno(
                 "Enviar as telas ao Claude?",
-                "Para montar o roteiro sozinho, o app vai enviar ao Claude, pela sua conta no Claude Code deste "
-                f"computador:\n\n• as telas dos testes de referência ({telas} imagens, reduzidas)\n• os dados do ciclo\n\n"
+                "Para montar o roteiro e o relatório sozinho, o app vai enviar ao Claude, pela sua conta no Claude Code "
+                f"deste computador:\n\n• as telas dos testes ({telas} imagens, reduzidas)\n• {o_que}\n\n"
                 "Elas saem do computador. Confirme que as telas não têm dados pessoais ou sensíveis e que o uso do "
-                "Claude é aprovado pela empresa.\n\nA autorização fica salva; dá para revogá-la em Mais ▾ na aba Ciclos.\n\n"
-                "Autorizar?", icon="warning", default="no", parent=self.raiz):
+                "Claude é aprovado pela empresa.\n\nA autorização fica salva (vale para os roteiros e para os "
+                "relatórios); dá para revogá-la em Mais ▾ na aba Ciclos.\n\nAutorizar?",
+                icon="warning", default="no", parent=self.raiz):
             return False
         self.cfg = replace(self.cfg, autorizou_envio_ia=datetime.now().isoformat(timespec="seconds"))
         config.salvar(self.cfg)
@@ -448,52 +502,103 @@ class App:
         config.salvar(self.cfg)
         self.painel_ciclos.var_status.set("Autorização revogada: da próxima vez o app volta a perguntar antes de enviar telas.")
 
-    def _oferecer_login(self, exe) -> None:
-        painel = self.painel_ciclos
+    def _oferecer_login(self, exe, status) -> None:
         if messagebox.askyesno(
                 "Conectar ao Claude",
-                "Para gerar o roteiro sozinho o app usa o Claude Code instalado neste computador, que ainda não está "
-                "conectado à sua conta do Claude.\n\nConectar agora? Abre uma janela e o navegador para o senhor entrar "
-                "(é uma vez só).", parent=self.raiz):
+                "Para gerar o roteiro e o relatório sozinho o app usa o Claude Code instalado neste computador, que "
+                "ainda não está conectado à sua conta do Claude.\n\nConectar agora? Abre uma janela e o navegador para "
+                "o senhor entrar (é uma vez só).", parent=self.raiz):
             try:
                 ia_local.abrir_login(exe)
             except OSError as exc:
                 messagebox.showerror("Não foi possível abrir o login", str(exc), parent=self.raiz)
                 return
-            painel.var_status.set("Termine o login na janela que abriu e no navegador; depois use "
-                                  "“Gerar roteiro com o Claude” de novo.")
+            status("Termine o login na janela que abriu e no navegador; depois peça de novo (“Gerar roteiro com o "
+                   "Claude” ou “Gerar relatório”).")
         else:
-            painel.var_status.set("Sem a conexão o roteiro automático não funciona. Em Mais ▾ há o pedido manual "
-                                  "no Claude desktop.")
+            status("Sem a conexão a geração automática não funciona. Em Mais ▾ há o pedido manual no Claude desktop.")
 
     def _processar_fila_ia(self) -> None:
         self.raiz.after(500, self._processar_fila_ia)
         try:
             while True:
-                resultado, ciclo, casos, mensagem = self._fila_ia.get_nowait()
-                self._gerando.pop(ciclo.pasta, None)
-                self.painel_ciclos.marcar_gerando(ciclo.pasta, False)
-                painel = self.painel_ciclos
-                if resultado == "ok":
-                    painel.var_status.set(f"Roteiro pronto: {casos} {'caso' if casos == 1 else 'casos'} em “{ciclo.nome}”.")
-                    try:
-                        mostrar_aviso(self.raiz, f"Roteiro pronto: {casos} casos", (0, 0, self.raiz.winfo_screenwidth(),
-                                                                                  self.raiz.winfo_screenheight()))
-                    except tk.TclError:
-                        pass
-                elif resultado == "cancelado":
-                    painel.var_status.set("Geração do roteiro cancelada.")
-                elif resultado == "nao_logado":
-                    exe = ia_local.localizar_claude()
-                    if exe is not None:
-                        self._oferecer_login(exe)
+                tipo, resultado, objeto, valor, mensagem = self._fila_ia.get_nowait()
+                if tipo == "roteiro":
+                    self._resultado_roteiro(resultado, objeto, valor, mensagem)
                 else:
-                    painel.var_status.set("Não foi possível gerar o roteiro.")
-                    messagebox.showwarning(
-                        "Não foi possível gerar o roteiro", f"{mensagem}\n\nO senhor pode tentar de novo ou pedir o "
-                        "roteiro no Claude desktop (Mais ▾ na aba Ciclos).", parent=self.raiz)
+                    self._resultado_relatorio(resultado, objeto, valor, mensagem)
         except queue.Empty:
             pass
+
+    def _avisar_pronto(self, texto: str) -> None:
+        try:
+            mostrar_aviso(self.raiz, texto, (0, 0, self.raiz.winfo_screenwidth(), self.raiz.winfo_screenheight()))
+        except tk.TclError:
+            pass
+
+    def _resultado_roteiro(self, resultado: str, ciclo, casos: int, mensagem: str) -> None:
+        self._gerando.pop(ciclo.pasta, None)
+        self.painel_ciclos.marcar_gerando(ciclo.pasta, False)
+        painel = self.painel_ciclos
+        if resultado == "ok":
+            painel.var_status.set(f"Roteiro pronto: {casos} {'caso' if casos == 1 else 'casos'} em “{ciclo.nome}”.")
+            self._avisar_pronto(f"Roteiro pronto: {casos} casos")
+        elif resultado == "cancelado":
+            painel.var_status.set("Geração do roteiro cancelada.")
+        elif resultado == "nao_logado":
+            exe = ia_local.localizar_claude()
+            if exe is not None:
+                self._oferecer_login(exe, painel.var_status.set)
+        else:
+            painel.var_status.set("Não foi possível gerar o roteiro.")
+            messagebox.showwarning(
+                "Não foi possível gerar o roteiro", f"{mensagem}\n\nO senhor pode tentar de novo ou pedir o "
+                "roteiro no Claude desktop (Mais ▾ na aba Ciclos).", parent=self.raiz)
+
+    def _resultado_relatorio(self, resultado: str, teste, valor, mensagem: str) -> None:
+        lote = self._lote
+        if lote is None:
+            return
+        if resultado == "andamento":
+            if lote["total"] > 1:
+                self._status_relatorio(f"O Claude está analisando o teste {valor} de {lote['total']}: {teste.nome_teste}…")
+            return
+        if resultado in ("ok", "erro", "nao_logado"):
+            lote["pendentes"].discard(teste.pasta)
+            self.painel_pdfs.marcar_gerando(lote["pendentes"])
+            if resultado == "ok":
+                lote["prontos"] += 1
+                self.painel_pdfs.atualizar()
+            elif resultado == "nao_logado":
+                lote["nao_logado"] = True
+            else:
+                lote["falhas"].append((teste.nome_teste, mensagem))
+            return
+        # "fim": a thread terminou (acabou, foi cancelada ou parou por falta de login)
+        self._lote = None
+        self.painel_pdfs.marcar_gerando(frozenset())
+        self.painel_pdfs.atualizar()
+        prontos, falhas = lote["prontos"], lote["falhas"]
+        cancelado = lote["controle"].cancelado
+        if lote["nao_logado"]:
+            exe = ia_local.localizar_claude()
+            if exe is not None:
+                self._oferecer_login(exe, self._status_relatorio)
+            return
+        if prontos:
+            self._status_relatorio(f"{prontos} {'relatório pronto' if prontos == 1 else 'relatórios prontos'} em "
+                                   "Meus testes." + (" Cancelado antes de terminar os demais." if cancelado else ""))
+            self._avisar_pronto("Relatório pronto" if prontos == 1 else f"{prontos} relatórios prontos")
+        elif cancelado:
+            self._status_relatorio("Geração do relatório cancelada.")
+        if falhas:
+            if not prontos and not cancelado:
+                self._status_relatorio("Não foi possível gerar o relatório.")
+            detalhe = "\n".join(f"• {nome}: {motivo}" for nome, motivo in falhas)
+            messagebox.showwarning(
+                "Não foi possível gerar o relatório",
+                f"{detalhe}\n\nO senhor pode tentar de novo ou pedir a análise no Claude desktop (Mais ▾ em Meus testes).",
+                parent=self.raiz)
 
     def _cancelar_geracao(self, ciclo) -> None:
         controle = self._gerando.get(ciclo.pasta)
@@ -502,7 +607,7 @@ class App:
             self.painel_ciclos.var_status.set("Cancelando a geração do roteiro…")
 
     def _gerar_roteiro_manual(self, ciclo) -> None:
-        """Plano B: abre o Claude desktop com o pedido do roteiro preenchido (o senhor aperta Enter)."""
+        """Plano B, só por escolha do usuário (Mais ▾): abre o Claude desktop com o pedido do roteiro preenchido."""
         painel = self.painel_ciclos
         problemas = extensao_claude.avisos(ciclo.pasta.parent, exigir_ferramenta="salvar_casos")
         if problemas and not messagebox.askyesno(
@@ -574,12 +679,14 @@ class App:
             self._registrar_atalhos()
 
     def _ao_fechar(self) -> None:
-        if self._gerando:
-            if not messagebox.askyesno("Sair", "O Claude está montando um roteiro agora. Sair cancela a geração. "
-                                       "Sair mesmo assim?", icon="warning", default="no", parent=self.raiz):
+        if self._gerando or self._lote is not None:
+            if not messagebox.askyesno("Sair", "O Claude está trabalhando num roteiro ou relatório agora. Sair cancela a "
+                                       "geração. Sair mesmo assim?", icon="warning", default="no", parent=self.raiz):
                 return
             for controle in self._gerando.values():
                 controle.cancelar()
+            if self._lote is not None:
+                self._lote["controle"].cancelar()
         if self.sessao.evidencias:
             resposta = messagebox.askyesnocancel(
                 "Sair",
