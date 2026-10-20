@@ -130,23 +130,21 @@ def montar_prompt_roteiro(ciclo: Ciclo, testes: list[PastaTeste], ausentes: list
                         _projeto(ciclo), _DEFINICAO, entrega]) + "\n"
 
 
-def montar_prompt_roteiro_local(ciclo: Ciclo, imagens: dict[str, tuple[str, list[tuple[int, str]]]],
-                                ausentes: list[str] | None = None) -> str:
-    """O prompt do roteiro para o app chamar o Claude Code sozinho (modo restrito, só com a ferramenta Read).
+def montar_prompt_roteiro_local(ciclo: Ciclo, imagens: dict[str, list[int]], ausentes: list[str] | None = None) -> str:
+    """O prompt do roteiro para o app chamar o Claude Code sozinho (modo restrito, sem ferramentas).
 
-    `imagens` mapeia a subpasta de trabalho (ex.: "t1") para (nome da pasta do teste, [(número da evidência,
-    nome do arquivo)]). O Claude lê as imagens com Read e responde SÓ com o JSON; quem grava o roteiro é o app.
+    `imagens` mapeia o nome da pasta do teste para os números das evidências enviadas. As imagens vêm no mesmo
+    pedido, cada uma antecedida do seu rótulo; o Claude responde SÓ com o JSON e quem grava o roteiro é o app.
     """
     if imagens:
-        blocos = []
-        for subpasta, (nome_teste, arquivos) in imagens.items():
-            lista = ", ".join(f"evidência {n} = {subpasta}/{arq}" for n, arq in arquivos)
-            blocos.append(f'- Teste "{nome_teste}": {lista}')
-        total = sum(len(a) for _, a in imagens.values())
-        telas = (f"## Telas de referência ({total} imagens)\nOs arquivos estão na pasta de trabalho atual:\n" + "\n".join(blocos)
-                 + "\n\nLeia TODAS as imagens com a ferramenta Read antes de escrever qualquer caso: é delas que você "
-                   "deduz as telas, os campos, as regras e os fluxos. Em `evidencias_base` use o nome do teste (o texto "
-                   "entre aspas) e o número da evidência.")
+        blocos = [f'- Teste "{nome_teste}": evidências {", ".join(str(n) for n in numeros)}'
+                  for nome_teste, numeros in imagens.items()]
+        total = sum(len(numeros) for numeros in imagens.values())
+        telas = (f"## Telas de referência ({total} imagens)\nAs imagens vêm a seguir neste pedido, cada uma antecedida do "
+                 "seu rótulo:\n" + "\n".join(blocos)
+                 + "\n\nOlhe TODAS as imagens antes de escrever qualquer caso: é delas que você deduz as telas, os campos, "
+                   "as regras e os fluxos. Em `evidencias_base` use o nome do teste (o texto entre aspas) e o número da "
+                   "evidência.")
     else:
         telas = ("## Telas de referência\nNenhuma tela de referência disponível: baseie-se só nas informações do ciclo "
                  "e marque a_confirmar=true onde o resultado esperado for hipótese.")
@@ -155,6 +153,6 @@ def montar_prompt_roteiro_local(ciclo: Ciclo, imagens: dict[str, tuple[str, list
         "Responda SOMENTE com um objeto JSON (sem texto antes ou depois, sem blocos de código) com os campos `casos` "
         "(lista de casos), `ciclo_sugerido` (objeto) e `observacoes` (lista de frases curtas com dúvidas e hipóteses "
         f"que o testador precisa confirmar). Formato de cada caso:\n{_EXEMPLO}\n"
-        "- `prioridade` é Alta, Média ou Baixa. Não use nenhuma ferramenta além de Read: o app valida e grava o roteiro.")
+        "- `prioridade` é Alta, Média ou Baixa. Não há ferramenta nenhuma: o app valida e grava o roteiro.")
     return "\n\n".join([_ABERTURA, _contexto(ciclo), telas + _ausentes(ausentes or []), f"## Regras\n{_REGRAS}",
                         _projeto(ciclo), _DEFINICAO, entrega]) + "\n"

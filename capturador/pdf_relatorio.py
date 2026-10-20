@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from reportlab import rl_config
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.utils import ImageReader, simpleSplit
 from reportlab.pdfbase import pdfmetrics
@@ -13,6 +14,8 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 MARGEM = 36
+# ASCII85 do ReportLab é Python puro: custava a maior parte do tempo do PDF com dezenas de telas e engordava o arquivo.
+rl_config.useA85 = 0
 ESCALA_MAXIMA = 1.0  # pt por pixel; evita ampliar recortes pequenos até ficarem borrados
 CINZA = (0.35, 0.35, 0.35)
 

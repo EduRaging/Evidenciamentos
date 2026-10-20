@@ -377,22 +377,20 @@ def montar_prompt_varios(testes: list[PastaTeste], form: Formulario) -> str:
 STATUS_SUGERIDOS = ("Aprovado", "Reprovado", "Inconclusivo")
 
 
-def montar_prompt_relatorio_local(teste: PastaTeste, imagens: list[tuple[int, str]], subpasta: str) -> str:
-    """O pedido do relatório para o app chamar o Claude Code sozinho (modo restrito, só com a ferramenta Read).
+def montar_prompt_relatorio_local(teste: PastaTeste, enviadas: list[int]) -> str:
+    """O pedido do relatório para o app chamar o Claude Code sozinho (modo restrito, sem ferramentas).
 
-    `imagens` traz (número da evidência, nome do arquivo dentro de `subpasta`) das telas que foram enviadas. O Claude
-    lê as imagens e responde SÓ com o JSON; quem grava o PDF e anexa as imagens é o app.
+    `enviadas` traz os números das evidências que seguem no pedido, cada uma antecedida de "Evidência N:". O Claude
+    responde SÓ com o JSON; quem grava o PDF e anexa as imagens é o app.
     """
-    arquivos = dict(imagens)
     total = len(teste.evidencias)
     linhas = []
     for e in teste.evidencias:
         hora = f" — {e.momento:%d/%m/%Y %H:%M:%S}" if e.momento else ""
-        onde = f"{subpasta}/{arquivos[e.numero]}" if e.numero in arquivos else "NÃO enviada"
-        linhas.append(f"{e.numero}. {e.rotulo}{hora} → {onde}")
+        linhas.append(f"{e.numero}. {e.rotulo}{hora} → {'enviada' if e.numero in enviadas else 'NÃO enviada'}")
     aviso = ""
-    if len(arquivos) < total:
-        aviso = (f"\nPara caber no pedido, só {len(arquivos)} das {total} evidências foram enviadas (as outras estão "
+    if len(enviadas) < total:
+        aviso = (f"\nPara caber no pedido, só {len(enviadas)} das {total} evidências foram enviadas (as outras estão "
                  'marcadas "NÃO enviada"): sobre elas escreva "não evidenciado" e não deduza o que mostram.')
     partes = [
         "Você é um analista de qualidade (QA) sênior. Vou te entregar as evidências (telas) de um teste manual de "
@@ -404,9 +402,9 @@ def montar_prompt_relatorio_local(teste: PastaTeste, imagens: list[tuple[int, st
         f"- Sistema / ambiente, objetivo, critérios de aceite e observações: {NAO_INFORMADO} (deduza pelo nome do "
         'teste e pelas telas e marque como "deduzido")',
         f"## Evidências ({total})\n"
-        'Os arquivos estão na pasta de trabalho atual. A "Evidência N" é o item N da lista:\n'
+        'As imagens vêm a seguir neste pedido, cada uma antecedida de "Evidência N:" (o item N da lista):\n'
         + "\n".join(linhas) + aviso
-        + "\n\nLeia TODAS as imagens enviadas com a ferramenta Read antes de escrever qualquer coisa.",
+        + "\n\nOlhe TODAS as imagens enviadas antes de escrever qualquer coisa.",
         f"## Regras\n{_REGRAS}",
         "## O que produzir\n" + _o_que_produzir("ambos", False),
         "## Como entregar\n"
@@ -415,6 +413,6 @@ def montar_prompt_relatorio_local(teste: PastaTeste, imagens: list[tuple[int, st
         "- `resumo`: 2 a 4 linhas;\n"
         "- `relatorio_markdown`: o conteúdo completo em Markdown (títulos, listas e tabelas com barras verticais), "
         "começando direto pelos casos de teste, sem capa nem título: o app coloca a capa e anexa as imagens.\n"
-        "Não use nenhuma ferramenta além de Read: o app grava o PDF.",
+        "Não há ferramenta nenhuma: o app grava o PDF.",
     ]
     return "\n\n".join(partes) + "\n"

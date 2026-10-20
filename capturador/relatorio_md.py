@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from PIL import Image as PILImage
+from reportlab import rl_config
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4
@@ -26,9 +27,13 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (HRFlowable, Image, KeepTogether, ListFlowable, ListItem, PageBreak,
                                 Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle)
 
-from .imagens import abrir_png
+from .imagens import reduzir_evidencia
 
 LADO_MAX_PDF = 1800  # px: ~270 dpi na largura útil da página; acima disso só incha o PDF
+LIMITE_BYTES_PDF = 600_000  # por imagem (em JPEG; só uma tela cheia de ruído chega perto)
+# O ReportLab codifica as imagens em ASCII85 por padrão, em Python puro: 44 telas custavam ~9 s e o arquivo ficava 25%
+# maior. Em binário o PDF é igual para quem lê.
+rl_config.useA85 = 0
 MARGEM = 18 * mm
 LARGURA_UTIL = A4[0] - 2 * MARGEM
 ALTURA_MAX_IMAGEM = 105 * mm  # duas evidências cabem por página
@@ -232,14 +237,12 @@ def _anexo_evidencias(evidencias: list[EvidenciaPdf], est: dict[str, ParagraphSt
     blocos: list = [PageBreak(), Paragraph("Evidências", est["h1"])]
     for ev in evidencias:
         # abre só como PNG, recusa imagens enormes e reduz antes de embutir: o PDF fica menor e uma
-        # imagem gigante não consome gigabytes de memória
-        with abrir_png(ev.caminho) as original:
-            original.thumbnail((LADO_MAX_PDF, LADO_MAX_PDF), PILImage.Resampling.LANCZOS)
-            reduzida = original.convert("RGB")
-        largura, altura = reduzida.size
-        dados = io.BytesIO()
-        reduzida.save(dados, "PNG")
-        dados.seek(0)
+        # imagem gigante não consome gigabytes de memória. Entra como JPEG: o PDF de 44 telas passava de 24 MB e
+        # levava quase 20 s recomprimindo PNGs (as imagens originais seguem intactas na pasta e no PDF de evidências).
+        bytes_da_imagem, _formato = reduzir_evidencia(ev.caminho, LADO_MAX_PDF, LIMITE_BYTES_PDF, so_jpeg=True)
+        with PILImage.open(io.BytesIO(bytes_da_imagem)) as reduzida:
+            largura, altura = reduzida.size
+        dados = io.BytesIO(bytes_da_imagem)
         escala = min(LARGURA_UTIL / largura, ALTURA_MAX_IMAGEM / altura, 1.0)
         hora = f" — {ev.momento:%d/%m/%Y %H:%M:%S}" if ev.momento else ""
         legenda = _paragrafo(f"Evidência {ev.numero} — {ev.rotulo}{hora}", est["legenda"])

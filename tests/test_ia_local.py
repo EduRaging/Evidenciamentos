@@ -1,4 +1,5 @@
 """Chamada do Claude Code pelo app (sem chamar o Claude de verdade): comando, pasta de trabalho, resposta e falhas."""
+import io
 import json
 import os
 import subprocess
@@ -102,7 +103,9 @@ class Login(unittest.TestCase):
         self.assertEqual(opcoes["creationflags"], ia_local.NOVO_CONSOLE)
 
 
-class PastaDeTrabalho(unittest.TestCase):
+class TelasNoPedido(unittest.TestCase):
+    """As telas vão reduzidas e na memória, dentro do próprio pedido: nada é copiado para o disco."""
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
@@ -119,74 +122,81 @@ class PastaDeTrabalho(unittest.TestCase):
         from capturador import metadados
         return [metadados.ler(p) for p in pastas]
 
-    def test_copia_so_as_telas_reduzidas_e_nenhum_outro_arquivo_do_teste(self):
+    def test_telas_reduzidas_na_memoria_e_nenhum_outro_arquivo_do_teste(self):
         pasta = self.criar("Login", 2, (4000, 3000))
         (pasta / "Relatório de testes - Login.pdf").write_bytes(b"%PDF segredo")
         (pasta / "Relatório de testes - Login.md").write_text("relatório antigo", encoding="utf-8")
-        destino = self.raiz / "trabalho"
-        destino.mkdir()
-        mapa = ia_local.preparar_pasta_de_trabalho(self.criar_testes(pasta), destino)
-        arquivos = sorted(p.relative_to(destino).as_posix() for p in destino.rglob("*") if p.is_file())
-        self.assertEqual(arquivos, ["t1/01.png", "t1/02.png"])
-        with Image.open(destino / "t1" / "01.png") as img:
+        telas = ia_local.preparar_telas(self.criar_testes(pasta))
+        self.assertEqual([(t.numero, t.formato, t.rotulo) for t in telas],
+                         [(1, "png", "Evidência 1:"), (2, "png", "Evidência 2:")])
+        self.assertTrue(all(t.teste == pasta.name for t in telas))
+        with Image.open(io.BytesIO(telas[0].dados)) as img:
             self.assertEqual(max(img.size), ia_local.LADO_MAXIMO)
-        self.assertEqual(mapa, {"t1": (pasta.name, [(1, "01.png"), (2, "02.png")])})
+        self.assertNotIn(b"segredo", b"".join(t.dados for t in telas))
 
-    def test_tela_pesada_vai_como_jpeg_leve_e_o_nome_do_arquivo_acompanha(self):
+    def test_tela_pesada_vai_como_jpeg_leve(self):
         from tests.test_imagens import tela_com_foto
         sessao = Sessao(self.raiz / "trab_pesada")
         sessao.adicionar(tela_com_foto(), "tela")
         sessao.adicionar(Image.new("RGB", (800, 600), "navy"), "tela")
         pasta = sessao.finalizar("Login com foto", "QA", self.base)
-        destino = self.raiz / "trabalho"
-        destino.mkdir()
-        mapa = ia_local.preparar_pasta_de_trabalho(self.criar_testes(pasta), destino)
-        self.assertEqual(mapa, {"t1": (pasta.name, [(1, "01.jpg"), (2, "02.png")])})
-        self.assertLess((destino / "t1" / "01.jpg").stat().st_size, 1_000_000)
-        with Image.open(destino / "t1" / "01.jpg") as img:
+        telas = ia_local.preparar_telas(self.criar_testes(pasta))
+        self.assertEqual([(t.numero, t.formato) for t in telas], [(1, "jpeg"), (2, "png")])
+        self.assertLessEqual(len(telas[0].dados), ia_local.LIMITE_IMAGEM_BYTES)
+        with Image.open(io.BytesIO(telas[0].dados)) as img:
             self.assertEqual(img.format, "JPEG")
 
     def test_telas_pequenas_nao_sao_ampliadas(self):
         pasta = self.criar("Login", 1, (300, 200))
-        destino = self.raiz / "trabalho"
-        destino.mkdir()
-        ia_local.preparar_pasta_de_trabalho(self.criar_testes(pasta), destino)
-        with Image.open(destino / "t1" / "01.png") as img:
+        with Image.open(io.BytesIO(ia_local.preparar_telas(self.criar_testes(pasta))[0].dados)) as img:
             self.assertEqual(img.size, (300, 200))
 
     def test_limite_de_imagens_com_telas_espacadas_e_numero_original_preservado(self):
         pasta = self.criar("Login", 12)
-        destino = self.raiz / "trabalho"
-        destino.mkdir()
-        mapa = ia_local.preparar_pasta_de_trabalho(self.criar_testes(pasta), destino, max_imagens=4)
-        numeros = [n for n, _ in mapa["t1"][1]]
+        numeros = [t.numero for t in ia_local.preparar_telas(self.criar_testes(pasta), max_imagens=4)]
         self.assertEqual(len(numeros), 4)
         self.assertEqual((numeros[0], numeros[-1]), (1, 12))  # primeira e última sempre entram
-        self.assertEqual(sorted(p.name for p in (destino / "t1").iterdir()), [f"{n:02d}.png" for n in numeros])
 
-    def test_varios_testes_dividem_o_limite_e_ficam_em_subpastas_proprias(self):
+    def test_varios_testes_dividem_o_limite_e_o_rotulo_diz_de_qual_teste_e_a_tela(self):
         pastas = [self.criar(f"Teste {i}", 10) for i in range(1, 5)]
-        destino = self.raiz / "trabalho"
-        destino.mkdir()
-        mapa = ia_local.preparar_pasta_de_trabalho(self.criar_testes(*pastas), destino, max_imagens=8)
-        self.assertEqual(sorted(mapa), ["t1", "t2", "t3", "t4"])
-        self.assertTrue(all(len(v[1]) == 3 for v in mapa.values()))  # no mínimo 3 por teste
-        self.assertEqual([v[0] for v in mapa.values()], [p.name for p in pastas])
+        telas = ia_local.preparar_telas(self.criar_testes(*pastas), max_imagens=8)
+        resumo = ia_local.resumo_das_telas(telas)
+        self.assertEqual(list(resumo), [p.name for p in pastas])
+        self.assertTrue(all(len(numeros) == 3 for numeros in resumo.values()))  # no mínimo 3 por teste
+        self.assertEqual(telas[0].rotulo, f'Teste "{pastas[0].name}", evidência 1:')
 
-    def test_pngs_invalidos_e_atalhos_sao_pulados(self):
+    def test_pngs_invalidos_sao_pulados(self):
         pasta = self.criar("Login", 3)
         (pasta / "02_tela.png").write_bytes(b"BM" + b"\x00" * 100)  # outro formato com nome de .png
-        destino = self.raiz / "trabalho"
-        destino.mkdir()
-        mapa = ia_local.preparar_pasta_de_trabalho(self.criar_testes(pasta), destino)
-        self.assertEqual([n for n, _ in mapa["t1"][1]], [1, 3])
+        self.assertEqual([t.numero for t in ia_local.preparar_telas(self.criar_testes(pasta))], [1, 3])
 
-    def test_teste_sem_nenhuma_tela_aproveitavel_nao_entra_no_mapa(self):
+    def test_teste_sem_nenhuma_tela_aproveitavel_nao_entra(self):
         pasta = self.criar("Login", 1)
         (pasta / "01_tela.png").write_bytes(b"lixo")
-        destino = self.raiz / "trabalho"
-        destino.mkdir()
-        self.assertEqual(ia_local.preparar_pasta_de_trabalho(self.criar_testes(pasta), destino), {})
+        self.assertEqual(ia_local.preparar_telas(self.criar_testes(pasta)), [])
+
+    def test_a_soma_das_telas_respeita_o_limite_do_pedido(self):
+        from tests.test_imagens import tela_com_foto
+        sessao = Sessao(self.raiz / "trab_soma")
+        for _ in range(4):
+            sessao.adicionar(tela_com_foto((400, 300)), "tela")
+        pasta = sessao.finalizar("Quatro fotos", "QA", self.base)
+        with mock.patch.object(ia_local, "LIMITE_TOTAL_BYTES", 80_000):
+            telas = ia_local.preparar_telas(self.criar_testes(pasta))
+        self.assertEqual(len(telas), 4)
+        self.assertLessEqual(sum(len(t.dados) for t in telas), 80_000)
+
+    def test_a_mensagem_leva_o_texto_e_cada_tela_com_o_seu_rotulo(self):
+        telas = [ia_local.Tela("Teste A", 1, b"\x89PNG-falso", "png", "Evidência 1:"),
+                 ia_local.Tela("Teste A", 3, b"\xff\xd8jpeg-falso", "jpeg", "Evidência 3:")]
+        linha = ia_local.montar_mensagem("PEDIDO", telas)
+        self.assertTrue(linha.endswith("\n") and linha.count("\n") == 1)  # uma linha JSON só
+        conteudo = json.loads(linha)["message"]["content"]
+        self.assertEqual([c["type"] for c in conteudo], ["text", "text", "image", "text", "image"])
+        self.assertEqual((conteudo[0]["text"], conteudo[1]["text"], conteudo[3]["text"]), ("PEDIDO", "Evidência 1:", "Evidência 3:"))
+        self.assertEqual((conteudo[2]["source"]["media_type"], conteudo[4]["source"]["media_type"]), ("image/png", "image/jpeg"))
+        import base64
+        self.assertEqual(base64.b64decode(conteudo[4]["source"]["data"]), b"\xff\xd8jpeg-falso")
 
     def test_espacadas(self):
         self.assertEqual(ia_local._espacadas([1, 2, 3], 5), [1, 2, 3])
@@ -197,16 +207,18 @@ class PastaDeTrabalho(unittest.TestCase):
 
 
 class Comando(unittest.TestCase):
-    def test_modo_restrito_so_com_read_e_sem_permissao_para_nada_alem_disso(self):
+    def test_modo_restrito_sem_nenhuma_ferramenta_e_sem_permissao_para_nada(self):
         c = ia_local.montar_comando(Path("C:/x/claude.exe"))
         pares = {c[i]: c[i + 1] for i in range(len(c) - 1)}
         self.assertEqual(c[0], "C:\\x\\claude.exe".replace("\\", os.sep) if os.sep == "/" else str(Path("C:/x/claude.exe")))
         self.assertIn("-p", c)
-        self.assertEqual((pares["--tools"], pares["--allowedTools"]), ("Read", "Read"))
+        self.assertEqual(pares["--tools"], "")  # nenhuma ferramenta: as telas vão dentro do pedido
+        self.assertNotIn("--allowedTools", c)
         self.assertEqual((pares["--permission-mode"], pares["--permission-prompts"]), ("dontAsk", "none"))
         for bandeira in ("--restricted", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"):
             self.assertIn(bandeira, c)
-        self.assertEqual(pares["--output-format"], "json")
+        self.assertEqual((pares["--input-format"], pares["--output-format"]), ("stream-json", "stream-json"))
+        self.assertIn("--verbose", c)  # o stream-json exige
         self.assertIn("--max-budget-usd", c)
 
     def test_nada_perigoso_na_linha_de_comando(self):
@@ -231,6 +243,19 @@ class Comando(unittest.TestCase):
 class Resposta(unittest.TestCase):
     def test_saida_estruturada(self):
         self.assertEqual(ia_local.extrair_resposta(saida_ok())["casos"][0]["id"], "CT-01")
+
+    def test_saida_em_eventos_stream_json_usa_o_evento_result(self):
+        eventos = [{"type": "system", "subtype": "init", "tools": []},
+                   {"type": "assistant", "message": {"content": [{"type": "text", "text": "pensando"}]}},
+                   json.loads(saida_ok({**ROTEIRO, "observacoes": ["do result"]}))]
+        saida = "\n".join(json.dumps(e) for e in eventos) + "\n"
+        self.assertEqual(ia_local.extrair_resposta(saida)["observacoes"], ["do result"])
+
+    def test_nao_logado_em_eventos_stream_json(self):
+        eventos = [{"type": "assistant", "error": "authentication_failed", "message": {"content": [{"type": "text", "text": "Not logged in"}]}},
+                   {"type": "result", "is_error": True, "result": "Not logged in · Please run /login"}]
+        with self.assertRaises(ia_local.NaoLogado):
+            ia_local.extrair_resposta("\n".join(json.dumps(e) for e in eventos))
 
     def test_json_dentro_do_texto_do_resultado(self):
         for texto in (json.dumps(ROTEIRO), "```json\n" + json.dumps(ROTEIRO) + "\n```", "Aqui está:\n" + json.dumps(ROTEIRO) + "\nPronto."):
@@ -337,25 +362,27 @@ class GerarRoteiro(unittest.TestCase):
         roteiro = ciclos.ler_roteiro_mais_recente(self.ciclo.pasta)
         self.assertEqual((roteiro.casos[0].id, roteiro.ciclo_sugerido["objetivo"], roteiro.observacoes), ("CT-01", "Validar o login", ["Dúvida?"]))
 
-    def test_o_prompt_lista_as_telas_com_o_nome_do_teste_e_nao_usa_ferramentas_da_extensao(self):
+    def test_o_pedido_leva_as_telas_dentro_dele_e_nao_usa_ferramentas(self):
         processo = ProcessoFalso(saida_ok())
         self.gerar(processo)
-        self.assertIn("t1/01.png", processo.entrada)
-        self.assertIn(f'Teste "{self.teste.name}"', processo.entrada)
-        self.assertIn("Responda SOMENTE com um objeto JSON", processo.entrada)
-        self.assertNotIn("salvar_casos", processo.entrada)
-        self.assertNotIn("ver_evidencia", processo.entrada)
+        conteudo = json.loads(processo.entrada)["message"]["content"]
+        texto = conteudo[0]["text"]
+        self.assertEqual(sum(1 for c in conteudo if c["type"] == "image"), 3)
+        self.assertIn(f'Teste "{self.teste.name}": evidências 1, 2, 3', texto)
+        self.assertIn("Responda SOMENTE com um objeto JSON", texto)
+        for proibido in ("salvar_casos", "ver_evidencia", "Read", "t1/01.png"):
+            self.assertNotIn(proibido, texto)
 
-    def test_a_pasta_temporaria_com_as_telas_some_no_fim(self):
+    def test_o_claude_roda_numa_pasta_vazia_que_some_no_fim_e_nenhuma_tela_vai_para_o_disco(self):
         usada = {}
 
         def abrir(comando, **opcoes):
             usada["pasta"] = Path(opcoes["cwd"])
-            usada["conteudo"] = sorted(p.relative_to(usada["pasta"]).as_posix() for p in usada["pasta"].rglob("*") if p.is_file())
+            usada["conteudo"] = sorted(p.name for p in usada["pasta"].rglob("*"))
             return ProcessoFalso(saida_ok())
 
         ia_local.gerar_roteiro(self.ciclo, self.base, Path("claude.exe"), abrir_processo=abrir)
-        self.assertEqual(usada["conteudo"], ["t1/01.png", "t1/02.png", "t1/03.png"])
+        self.assertEqual(usada["conteudo"], [])
         self.assertFalse(usada["pasta"].exists())
 
     def test_a_pasta_temporaria_some_tambem_quando_da_erro(self):
@@ -444,10 +471,12 @@ class GerarRelatorio(unittest.TestCase):
         comando = fabrica.chamadas[0][0]
         self.assertIn("relatorio_markdown", comando[comando.index("--json-schema") + 1])
         self.assertNotIn('"casos"', comando[comando.index("--json-schema") + 1])
-        self.assertIn("t1/01.png", processo.entrada)
-        self.assertIn("Cadastro de fornecedor", processo.entrada)
-        self.assertNotIn("salvar_relatorio_pdf", processo.entrada)
-        self.assertNotIn("ver_evidencia", processo.entrada)
+        conteudo = json.loads(processo.entrada)["message"]["content"]
+        self.assertEqual([c["text"] for c in conteudo if c["type"] == "text"][1:], ["Evidência 1:", "Evidência 2:", "Evidência 3:"])
+        self.assertEqual(sum(1 for c in conteudo if c["type"] == "image"), 3)
+        self.assertIn("Cadastro de fornecedor", conteudo[0]["text"])
+        for proibido in ("salvar_relatorio_pdf", "ver_evidencia", "Read"):
+            self.assertNotIn(proibido, conteudo[0]["text"])
 
     def test_status_fora_da_lista_vira_inconclusivo_e_o_texto_da_ia_nao_vira_marcacao(self):
         ruim = {"status_sugerido": "Aprovado com louvor", "relatorio_markdown": "<script>alert(1)</script> **ok**"}

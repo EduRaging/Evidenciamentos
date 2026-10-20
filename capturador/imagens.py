@@ -36,20 +36,22 @@ def _codificar(imagem: Image.Image, formato: str, **opcoes) -> bytes:
     return saida.getvalue()
 
 
-def reduzir_para_ia(caminho: Path | str, lado_maximo: int = 1568,
-                    limite_bytes: int = LIMITE_BYTES_IA) -> tuple[bytes, str]:
-    """A evidência pronta para a IA olhar: no máximo `lado_maximo` px e no máximo `limite_bytes`.
+def reduzir_evidencia(caminho: Path | str, lado_maximo: int = 1568, limite_bytes: int = LIMITE_BYTES_IA,
+                      so_jpeg: bool = False) -> tuple[bytes, str]:
+    """A evidência reduzida (para a IA olhar ou para entrar no PDF): no máximo `lado_maximo` px e `limite_bytes`.
 
     Devolve (bytes, "png" ou "jpeg"). PNG sempre que couber (sem perda, o melhor para texto de tela); se uma tela
     com fotos ou degradês passar do limite, vira JPEG (qualidade 85, depois 70) e, se ainda for preciso, encolhe
-    20% por vez. ValueError se o arquivo não for um PNG válido ou nem assim couber.
+    20% por vez. Com `so_jpeg` nem tenta o PNG (codificá-lo é o que mais custa). ValueError se o arquivo não for um
+    PNG válido ou nem assim couber.
     """
     with abrir_png(caminho) as original:  # só PNG e com limite de pixels
         original.thumbnail((lado_maximo, lado_maximo), Image.Resampling.LANCZOS)
         atual = original.convert("RGB")  # converte DEPOIS de reduzir: poupa memória
-    dados = _codificar(atual, "PNG", optimize=True)
-    if len(dados) <= limite_bytes:
-        return dados, "png"
+    if not so_jpeg:
+        dados = _codificar(atual, "PNG")  # sem optimize: ele leva até 2 s por tela e só poupa uns 5%
+        if len(dados) <= limite_bytes:
+            return dados, "png"
     for _ in range(8):
         for qualidade in (85, 70):
             dados = _codificar(atual, "JPEG", quality=qualidade, optimize=True)

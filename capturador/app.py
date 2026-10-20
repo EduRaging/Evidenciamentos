@@ -5,6 +5,7 @@ import logging
 import os
 import queue
 import threading
+import time
 import tkinter as tk
 from dataclasses import replace
 from datetime import datetime
@@ -34,6 +35,7 @@ class App:
         self._ocupado = False
         self._gerando: dict[Path, ia_local.Controle] = {}  # roteiros que o Claude está montando agora
         self._lote: dict | None = None  # relatórios que o Claude está montando agora (um lote por vez)
+        self._andamento: dict = {}  # o que mostrar na linha de status, com o tempo, enquanto o Claude trabalha
         self._fila_ia: queue.Queue = queue.Queue()  # resultados das gerações (vêm de outra thread)
         self.atalhos = atalhos.GerenciadorAtalhos(self._fila.put)
 
@@ -368,6 +370,23 @@ class App:
         self.painel_ciclos.selecionar(ciclo.pasta)
         self._gerar_roteiro(ciclo)
 
+    def _acompanhar(self, chave, texto: str, status) -> None:
+        """Mostra `texto` na linha de status com o tempo decorrido, de segundo em segundo, até `chave` sair de `_andamento`.
+
+        Sem isso o app fica mudo por um ou dois minutos e parece travado.
+        """
+        self._andamento[chave] = texto
+        inicio = time.monotonic()
+
+        def tique() -> None:
+            if chave not in self._andamento:
+                return
+            segundos = int(time.monotonic() - inicio)
+            status(f"{self._andamento[chave]}  ·  {segundos // 60}:{segundos % 60:02d}")
+            self.raiz.after(1000, tique)
+
+        tique()
+
     def _pronto_para_ia(self, status, telas: int, o_que: str, retomar) -> Path | None:
         """Confere o Claude Code, a autorização e o login. Devolve o executável, ou None (com a explicação em `status`).
 
@@ -402,8 +421,8 @@ class App:
         controle = ia_local.Controle()
         self._gerando[ciclo.pasta] = controle
         painel.marcar_gerando(ciclo.pasta, True)
-        painel.var_status.set(f"O Claude está montando o roteiro de “{ciclo.nome}”… pode levar alguns minutos; o app "
-                              "continua livre para capturar.")
+        self._acompanhar(ciclo.pasta, f"O Claude está montando o roteiro de “{ciclo.nome}”… o app continua livre "
+                         "para capturar", painel.var_status.set)
         base = self.cfg.pasta_base
 
         def trabalho() -> None:  # thread: nada de Tk aqui, só devolve o resultado pela fila
@@ -454,8 +473,8 @@ class App:
         self._lote = {"controle": controle, "pendentes": {t.pasta for t in testes}, "prontos": 0, "falhas": [],
                       "nao_logado": False, "total": len(testes)}
         self.painel_pdfs.marcar_gerando(self._lote["pendentes"])
-        self._status_relatorio(f"O Claude está analisando {'o teste' if len(testes) == 1 else f'{len(testes)} testes'}…"
-                               " pode levar alguns minutos; o app continua livre para capturar.")
+        self._acompanhar("relatorios", f"O Claude está analisando {'o teste' if len(testes) == 1 else f'{len(testes)} testes'}…"
+                         " o app continua livre para capturar", self._status_relatorio)
         base = self.cfg.pasta_base
 
         def trabalho() -> None:  # thread: nada de Tk aqui, só devolve o resultado pela fila
@@ -484,6 +503,7 @@ class App:
     def _cancelar_relatorios(self) -> None:
         if self._lote is not None:
             self._lote["controle"].cancelar()
+            self._andamento["relatorios"] = "Cancelando a geração do relatório…"
             self._status_relatorio("Cancelando a geração do relatório…")
 
     def _autorizou_envio(self, telas: int, o_que: str) -> bool:
@@ -561,6 +581,7 @@ class App:
 
     def _resultado_roteiro(self, resultado: str, ciclo, casos: int, mensagem: str) -> None:
         self._gerando.pop(ciclo.pasta, None)
+        self._andamento.pop(ciclo.pasta, None)
         self.painel_ciclos.marcar_gerando(ciclo.pasta, False)
         painel = self.painel_ciclos
         if resultado == "ok":
@@ -583,8 +604,8 @@ class App:
         if lote is None:
             return
         if resultado == "andamento":
-            if lote["total"] > 1:
-                self._status_relatorio(f"O Claude está analisando o teste {valor} de {lote['total']}: {teste.nome_teste}…")
+            if lote["total"] > 1 and "relatorios" in self._andamento and not lote["controle"].cancelado:
+                self._andamento["relatorios"] = f"O Claude está analisando o teste {valor} de {lote['total']}: {teste.nome_teste}…"
             return
         if resultado in ("ok", "erro", "nao_logado"):
             lote["pendentes"].discard(teste.pasta)
@@ -599,6 +620,7 @@ class App:
             return
         # "fim": a thread terminou (acabou, foi cancelada ou parou por falta de login)
         self._lote = None
+        self._andamento.pop("relatorios", None)
         self.painel_pdfs.marcar_gerando(frozenset())
         self.painel_pdfs.atualizar()
         prontos, falhas = lote["prontos"], lote["falhas"]
@@ -628,6 +650,7 @@ class App:
         controle = self._gerando.get(ciclo.pasta)
         if controle is not None:
             controle.cancelar()
+            self._andamento[ciclo.pasta] = "Cancelando a geração do roteiro…"
             self.painel_ciclos.var_status.set("Cancelando a geração do roteiro…")
 
     def _gerar_roteiro_manual(self, ciclo) -> None:

@@ -29,6 +29,13 @@ class GravarRelatorio(unittest.TestCase):
         self.assertEqual(r["evidencias_anexadas"], 2)
         self.assertEqual(r["caminho_pdf"], str(self.pasta / "Relatório de testes.pdf"))
 
+    def test_o_pdf_leva_as_telas_como_jpeg_em_binario_e_continua_valido(self):
+        r = gravacao.gravar_relatorio_pdf(self.dados, "Relatório de testes", "# Resumo")
+        bruto = (self.pasta / r["pdf"]).read_bytes()
+        self.assertIn(b"/DCTDecode", bruto)  # JPEG embutido direto: sem recomprimir PNG
+        self.assertNotIn(b"ASCII85Decode", bruto)  # a codificação ASCII85 do ReportLab é lenta e engorda o arquivo
+        self.assertTrue(bruto.rstrip().endswith(b"%%EOF"))
+
     def test_sem_imagens_quando_nao_pedidas(self):
         r = gravacao.gravar_relatorio_pdf(self.dados, "Só texto", "# Oi", incluir_evidencias=False)
         self.assertEqual(r["evidencias_anexadas"], 0)

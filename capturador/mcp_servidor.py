@@ -19,7 +19,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from . import ciclos, gravacao, metadados
-from .imagens import reduzir_para_ia
+from .imagens import reduzir_evidencia
 from .metadados import PastaTeste
 from .prompt_ciclo import montar_prompt_roteiro
 from .prompt_ia import SAIDAS, Formulario, montar_prompt
@@ -168,7 +168,7 @@ def ver_evidencia(teste: str, numero: int) -> Image:
     if caminho is None:
         raise ValueError(f"O arquivo da evidência {numero} não foi encontrado na pasta do teste.")
     # só PNG e com limite de pixels; acima de ~700 KB o Claude desktop recusa a imagem, então vira JPEG (imagens.py)
-    imagem, formato = reduzir_para_ia(caminho, LADO_MAXIMO)
+    imagem, formato = reduzir_evidencia(caminho, LADO_MAXIMO)
     return Image(data=imagem, format=formato)
 
 

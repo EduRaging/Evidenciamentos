@@ -1,12 +1,15 @@
 """O app chama o Claude Code deste computador, sozinho, para montar o roteiro e o relatório (sem chave de API).
 
-O Claude Code roda em modo NÃO interativo e RESTRITO: só a ferramenta Read, numa pasta de trabalho
-temporária com cópias REDUZIDAS das telas (nada mais), sem MCP, sem skills, sem ler as configurações do
-usuário, e tudo o que pediria permissão é negado. A IA só devolve um JSON: quem valida e grava o roteiro
-ou o relatório é o app. Usa o login do Claude Code do próprio usuário (`claude auth login`, uma vez).
+O Claude Code roda em modo NÃO interativo e RESTRITO: SEM ferramenta nenhuma (nem Read), numa pasta temporária
+vazia, sem MCP, sem skills, sem ler as configurações do usuário, e tudo o que pediria permissão é negado. As
+telas vão REDUZIDAS e dentro do próprio pedido (na memória: nenhuma cópia vai para o disco), e a IA só devolve um
+JSON: quem valida e grava o roteiro ou o relatório é o app. Com as imagens no pedido o Claude responde numa única
+volta, em vez de abrir uma imagem por vez (40 telas: 29 s contra 75 s). Usa o login do Claude Code do próprio
+usuário (`claude auth login`, uma vez).
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -20,7 +23,7 @@ from typing import Callable
 
 from . import ciclos, fluxo_ciclo, gravacao, metadados
 from .ciclos import Ciclo
-from .imagens import reduzir_para_ia
+from .imagens import reduzir_evidencia
 from .metadados import PastaTeste
 from .prompt_ciclo import montar_prompt_roteiro_local
 from .prompt_ia import STATUS_SUGERIDOS, montar_prompt_relatorio_local
@@ -28,6 +31,8 @@ from .prompt_ia import STATUS_SUGERIDOS, montar_prompt_relatorio_local
 LADO_MAXIMO = 1568  # px, como na extensão: acima disso a IA reduz de qualquer jeito e só custa mais
 MAX_IMAGENS = 40  # por pedido; com vários testes, cada um entra com algumas telas espaçadas
 MIN_POR_TESTE = 3
+LIMITE_IMAGEM_BYTES = 400_000  # por tela dentro do pedido
+LIMITE_TOTAL_BYTES = 16_000_000  # soma das telas (o pedido todo aceita ~32 MB, e o base64 incha 1/3)
 TEMPO_LIMITE_S = 25 * 60
 ORCAMENTO_USD = 10.0
 SEM_JANELA = 0x08000000  # CREATE_NO_WINDOW
@@ -112,7 +117,7 @@ def esperar_login(processo, exe: Path, tempo_limite: float = 600, verificar: Cal
     return {}
 
 
-# --- as telas viram cópias reduzidas numa pasta temporária ---------------------------------------
+# --- as telas viram imagens reduzidas, em memória, dentro do próprio pedido ----------------------
 def _espacadas(itens: list, quantas: int) -> list:
     """`quantas` itens bem distribuídos entre o primeiro e o último (ou todos, se forem poucos)."""
     if len(itens) <= quantas:
@@ -127,34 +132,60 @@ def _e_atalho(caminho: Path) -> bool:
     return os.path.islink(caminho) or os.path.isjunction(caminho)
 
 
-def preparar_pasta_de_trabalho(testes: list[PastaTeste], destino: Path,
-                               max_imagens: int = MAX_IMAGENS) -> dict[str, tuple[str, list[tuple[int, str]]]]:
-    """Copia, reduzidas, as telas dos testes para `destino` (t1\\01.png, t2\\03.jpg…) e devolve o mapa usado no prompt.
+@dataclass
+class Tela:
+    """Uma evidência reduzida, pronta para ir dentro do pedido ao Claude."""
+    teste: str  # nome da pasta do teste
+    numero: int
+    dados: bytes
+    formato: str  # "png" ou "jpeg"
+    rotulo: str  # o texto que antecede a imagem no pedido
 
-    Só PNGs de verdade e dentro da pasta do teste (nada de atalhos); nenhum outro arquivo do teste é copiado.
+
+def preparar_telas(testes: list[PastaTeste], max_imagens: int = MAX_IMAGENS) -> list[Tela]:
+    """As telas dos testes, reduzidas e na memória (nada é copiado para o disco), na ordem dos testes.
+
+    Só PNGs de verdade e dentro da pasta do teste (nada de atalhos). Com vários testes, cada um entra com algumas
+    telas espaçadas. O tamanho de cada imagem respeita um teto, e o total cabe no limite de ~32 MB de um pedido.
     """
     por_teste = max(MIN_POR_TESTE, max_imagens // max(1, len(testes)))
-    mapa: dict[str, tuple[str, list[tuple[int, str]]]] = {}
-    for i, teste in enumerate(testes, 1):
-        sub = f"t{i}"
-        (destino / sub).mkdir(parents=True, exist_ok=True)
-        copiadas: list[tuple[int, str]] = []
+    escolhidas = []
+    for teste in testes:
         if _e_atalho(teste.pasta):
             continue
-        for ev in _espacadas(teste.evidencias, por_teste):
-            origem = teste.pasta / ev.arquivo
-            try:
-                if _e_atalho(origem) or origem.resolve().parent != teste.pasta.resolve():
-                    continue
-                dados, formato = reduzir_para_ia(origem, LADO_MAXIMO)  # PNG; JPEG só se o PNG ficar pesado demais
-                nome = f"{ev.numero:02d}.{'jpg' if formato == 'jpeg' else 'png'}"
-                (destino / sub / nome).write_bytes(dados)
-                copiadas.append((ev.numero, nome))
-            except (OSError, ValueError):
+        escolhidas += [(teste, ev) for ev in _espacadas(teste.evidencias, por_teste)]
+    limite = min(LIMITE_IMAGEM_BYTES, LIMITE_TOTAL_BYTES // max(1, len(escolhidas)))
+    telas: list[Tela] = []
+    for teste, ev in escolhidas:
+        origem = teste.pasta / ev.arquivo
+        try:
+            if _e_atalho(origem) or origem.resolve().parent != teste.pasta.resolve():
                 continue
-        if copiadas:
-            mapa[sub] = (teste.pasta.name, copiadas)
-    return mapa
+            dados, formato = reduzir_evidencia(origem, LADO_MAXIMO, limite)  # PNG; JPEG se o PNG ficar pesado
+        except (OSError, ValueError):
+            continue
+        rotulo = f"Evidência {ev.numero}:" if len(testes) == 1 else f'Teste "{teste.pasta.name}", evidência {ev.numero}:'
+        telas.append(Tela(teste.pasta.name, ev.numero, dados, formato, rotulo))
+    return telas
+
+
+def resumo_das_telas(telas: list[Tela]) -> dict[str, list[int]]:
+    """Nome do teste -> números das evidências enviadas (o que o prompt do roteiro lista)."""
+    resumo: dict[str, list[int]] = {}
+    for tela in telas:
+        resumo.setdefault(tela.teste, []).append(tela.numero)
+    return resumo
+
+
+def montar_mensagem(prompt: str, telas: list[Tela]) -> str:
+    """A mensagem de entrada do Claude Code (stream-json): o texto do pedido e, depois, cada tela com o seu rótulo."""
+    partes: list[dict] = [{"type": "text", "text": prompt}]
+    for tela in telas:
+        partes.append({"type": "text", "text": tela.rotulo})
+        partes.append({"type": "image", "source": {
+            "type": "base64", "media_type": "image/jpeg" if tela.formato == "jpeg" else "image/png",
+            "data": base64.b64encode(tela.dados).decode("ascii")}})
+    return json.dumps({"type": "user", "message": {"role": "user", "content": partes}}, ensure_ascii=False) + "\n"
 
 
 # --- o pedido e a resposta -----------------------------------------------------------------------
@@ -197,10 +228,14 @@ ESQUEMA_RELATORIO = {
 
 
 def montar_comando(exe: Path, orcamento: float = ORCAMENTO_USD, esquema: dict | None = None) -> list[str]:
-    """A linha de comando do Claude Code: não interativo, só Read, restrito, sem MCP nem skills, sem sessão salva."""
+    """A linha de comando do Claude Code: não interativo, SEM ferramentas, restrito, sem MCP nem skills, sem sessão salva.
+
+    O pedido (texto e imagens) entra pela entrada padrão em `stream-json`, que é o único formato de entrada que aceita imagens.
+    """
     esquema = ESQUEMA_ROTEIRO if esquema is None else esquema
-    return [str(exe), "-p", "--output-format", "json", "--json-schema", json.dumps(esquema, ensure_ascii=False),
-            "--tools", "Read", "--allowedTools", "Read", "--permission-mode", "dontAsk", "--permission-prompts", "none",
+    return [str(exe), "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+            "--json-schema", json.dumps(esquema, ensure_ascii=False),
+            "--tools", "", "--permission-mode", "dontAsk", "--permission-prompts", "none",
             "--restricted", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence",
             "--max-budget-usd", f"{orcamento:g}"]
 
@@ -218,14 +253,29 @@ def _json_do_texto(texto: str):
         raise
 
 
+def _evento_final(saida: str) -> dict:
+    """O evento `result` da saída `stream-json` (uma linha JSON por evento) ou, se for um JSON só, ele mesmo."""
+    for linha in reversed(saida.strip().splitlines()):
+        linha = linha.strip()
+        if linha.startswith("{"):
+            try:
+                evento = json.loads(linha)
+            except ValueError:
+                continue
+            if isinstance(evento, dict) and evento.get("type") == "result":
+                return evento
+    dados = json.loads(saida)
+    if not isinstance(dados, dict):
+        raise ValueError("resposta inesperada")
+    return dados
+
+
 def extrair_resposta(saida: str) -> dict:
-    """O objeto (roteiro ou relatório) dentro da saída `--output-format json` do Claude Code. ErroIA/NaoLogado se não houver."""
+    """O objeto (roteiro ou relatório) dentro da saída do Claude Code. ErroIA/NaoLogado se não houver."""
     try:
-        dados = json.loads(saida)
+        dados = _evento_final(saida)
     except (ValueError, TypeError) as exc:
         raise ErroIA("O Claude Code devolveu uma resposta que o app não entendeu.") from exc
-    if not isinstance(dados, dict):
-        raise ErroIA("O Claude Code devolveu uma resposta inesperada.")
     texto = str(dados.get("result") or "")
     if dados.get("is_error"):
         if "not logged in" in texto.lower() or "/login" in texto.lower():
@@ -259,10 +309,10 @@ class Controle:
                 pass
 
 
-def executar(exe: Path, prompt: str, pasta_de_trabalho: Path, controle: Controle | None = None,
+def executar(exe: Path, entrada: str, pasta_de_trabalho: Path, controle: Controle | None = None,
              abrir_processo: Callable = subprocess.Popen, tempo_limite: float = TEMPO_LIMITE_S,
              esquema: dict | None = None) -> dict:
-    """Roda o Claude Code com o `prompt` (pela entrada padrão) na pasta de trabalho e devolve o objeto que ele responde."""
+    """Roda o Claude Code com a `entrada` (pela entrada padrão) na pasta de trabalho e devolve o objeto que ele responde."""
     controle = controle or Controle()
     if controle.cancelado:
         raise Cancelado("Geração cancelada.")
@@ -274,7 +324,7 @@ def executar(exe: Path, prompt: str, pasta_de_trabalho: Path, controle: Controle
         raise ErroIA("Não consegui iniciar o Claude Code deste computador.") from exc
     controle.processo = processo
     try:
-        saida, erro = processo.communicate(prompt, timeout=tempo_limite)
+        saida, erro = processo.communicate(entrada, timeout=tempo_limite)
     except subprocess.TimeoutExpired as exc:
         processo.kill()
         processo.communicate()
@@ -293,15 +343,15 @@ def gerar_roteiro(ciclo: Ciclo, base: Path | str, exe: Path, controle: Controle 
                   tempo_limite: float = TEMPO_LIMITE_S) -> tuple[Path, int]:
     """Gera o roteiro do ciclo sozinho e o grava. Devolve (arquivo, nº de casos). Levanta ErroIA com a explicação.
 
-    As telas vão como cópias reduzidas numa pasta temporária, apagada no fim (dê certo ou não).
+    As telas vão reduzidas, dentro do pedido; o Claude roda numa pasta temporária vazia, apagada no fim.
     """
     testes, ausentes = fluxo_ciclo.testes_de_referencia(ciclo, base)
-    with tempfile.TemporaryDirectory(prefix="capt_ia_") as tmp:
-        imagens = preparar_pasta_de_trabalho(testes, Path(tmp))
-        if testes and not imagens:
-            raise ErroIA("Não consegui preparar as telas dos testes de referência para enviar.")
-        prompt = montar_prompt_roteiro_local(ciclo, imagens, ausentes)
-        bruto = executar(exe, prompt, Path(tmp), controle, abrir_processo, tempo_limite)
+    telas = preparar_telas(testes)
+    if testes and not telas:
+        raise ErroIA("Não consegui preparar as telas dos testes de referência para enviar.")
+    mensagem = montar_mensagem(montar_prompt_roteiro_local(ciclo, resumo_das_telas(telas), ausentes), telas)
+    with tempfile.TemporaryDirectory(prefix="capt_ia_") as vazia:
+        bruto = executar(exe, mensagem, Path(vazia), controle, abrir_processo, tempo_limite)
     try:  # o app é quem valida: a IA só sugere. Nada é gravado se algo não servir.
         casos = ciclos.validar_casos(bruto.get("casos"))
         arquivo = ciclos.gravar_roteiro(ciclo.pasta, casos, bruto.get("observacoes"),
@@ -330,17 +380,16 @@ def gerar_relatorio(pasta: Path | str, base: Path | str, exe: Path, controle: Co
                     abrir_processo: Callable = subprocess.Popen, tempo_limite: float = TEMPO_LIMITE_S) -> dict:
     """Gera sozinho o relatório do teste em `pasta` e o grava em PDF na própria pasta. Devolve os dados do arquivo.
 
-    As telas vão como cópias reduzidas numa pasta temporária, apagada no fim. A IA devolve só o texto: o app põe a
-    capa, anexa as imagens e grava o PDF (nunca sobrescreve). Levanta ErroIA com a explicação.
+    As telas vão reduzidas, dentro do pedido. A IA devolve só o texto: o app põe a capa, anexa as imagens e grava o
+    PDF (nunca sobrescreve). Levanta ErroIA com a explicação.
     """
     teste = _teste_da_base(pasta, base)
-    with tempfile.TemporaryDirectory(prefix="capt_ia_") as tmp:
-        mapa = preparar_pasta_de_trabalho([teste], Path(tmp))
-        if not mapa:
-            raise ErroIA("Não consegui preparar as telas do teste para enviar.")
-        subpasta, (_nome, telas) = next(iter(mapa.items()))
-        bruto = executar(exe, montar_prompt_relatorio_local(teste, telas, subpasta), Path(tmp), controle,
-                         abrir_processo, tempo_limite, esquema=ESQUEMA_RELATORIO)
+    telas = preparar_telas([teste])
+    if not telas:
+        raise ErroIA("Não consegui preparar as telas do teste para enviar.")
+    mensagem = montar_mensagem(montar_prompt_relatorio_local(teste, [t.numero for t in telas]), telas)
+    with tempfile.TemporaryDirectory(prefix="capt_ia_") as vazia:
+        bruto = executar(exe, mensagem, Path(vazia), controle, abrir_processo, tempo_limite, esquema=ESQUEMA_RELATORIO)
     texto = bruto.get("relatorio_markdown")
     if not isinstance(texto, str) or not texto.strip():
         raise ErroIA("O Claude não devolveu o texto do relatório; tente de novo.")

@@ -159,22 +159,22 @@ def _geracao_automatica() -> str:
             raise AssertionError(f"comando sem {exigido}")
     if "Bash" in " ".join(comando) or "--dangerously-skip-permissions" in comando:
         raise AssertionError("comando com permissão demais")
+    if comando[comando.index("--tools") + 1] != "" or "--allowedTools" in comando:
+        raise AssertionError("o Claude não deveria ter ferramenta nenhuma")
     with tempfile.TemporaryDirectory() as tmp:
         pasta = _finalizar_exemplo(Path(tmp))
         testes, _ = fluxo_ciclo.testes_de_referencia(
             fluxo_ciclo.criar_a_partir_de_testes(pasta.parent, [pasta])[0], pasta.parent)
-        trabalho = Path(tmp) / "trabalho"
-        trabalho.mkdir()
-        mapa = ia_local.preparar_pasta_de_trabalho(testes, trabalho)
-        copiadas = sorted(p.name for p in trabalho.rglob("*") if p.is_file())
-        if not mapa or copiadas != [nome for _, nome in mapa["t1"][1]]:
-            raise AssertionError(f"pasta de trabalho inesperada: {copiadas}")
+        telas = ia_local.preparar_telas(testes)
+        mensagem = ia_local.montar_mensagem("pedido", telas)
+        if not telas or mensagem.count('"type": "image"') != len(telas):
+            raise AssertionError(f"telas no pedido inesperadas: {len(telas)}")
     resposta = ia_local.extrair_resposta('{"is_error": false, "structured_output": {"casos": []}}')
     if "casos" not in resposta:
         raise AssertionError("resposta estruturada não lida")
     achado = ia_local.localizar_claude()
     relatorio = _relatorio_automatico()
-    return (f"comando restrito, telas reduzidas e resposta; {relatorio}; Claude Code "
+    return (f"comando restrito sem ferramentas, telas reduzidas dentro do pedido e resposta; {relatorio}; Claude Code "
             f"{'encontrado' if achado else 'não encontrado (o app avisa e deixa o pedido manual em Mais ▾)'}")
 
 

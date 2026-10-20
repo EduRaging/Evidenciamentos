@@ -80,8 +80,8 @@ colando o PDF já copiado.
 Enter. Com **Ctrl** ou **Shift** o senhor seleciona **vários testes** (até 12 por vez); o app os
 analisa **um de cada vez**, e a coluna **Relat.** mostra "…" no teste em andamento. O app chama o
 Claude Code deste computador do mesmo jeito restrito dos ciclos (veja "Como o app chama o Claude",
-na seção Ciclos): só a ferramenta `Read`, numa pasta temporária com **cópias reduzidas das telas** do
-teste (no máximo 40), sem MCP nem skills. A IA devolve **só o texto** (os casos executados, o
+na seção Ciclos): **sem ferramenta nenhuma**, com as **telas reduzidas dentro do próprio pedido** (no
+máximo 40), sem MCP nem skills. A IA devolve **só o texto** (os casos executados, o
 relatório de execução e o **status sugerido**: Aprovado, Reprovado ou Inconclusivo); **quem põe a
 capa, anexa as imagens e grava o PDF é o app**, na pasta do próprio teste (`Relatório de testes -
 <teste>.pdf` e o `.md`; nunca sobrescreve, o segundo vira `(2)`). O senhor vê só o andamento na linha
@@ -119,12 +119,15 @@ jeito de sempre; daí em diante é **automático**, até a hora de executar e ev
    app, não pela IA) na pasta do ciclo.
 
 **Como o app chama o Claude.** Ele roda o **Claude Code que já vem com o Claude desktop** (em
-`%APPDATA%\Claude\claude-code`), em modo **não interativo e restrito**: só a ferramenta `Read`, sem
-MCP, sem skills, sem ler as suas configurações, sem sessão salva, com tudo o que pediria permissão
-negado e com teto de gasto. Ele roda numa **pasta temporária** que tem só **cópias reduzidas das telas**
-(no máximo 40; só PNGs de verdade e nada mais do teste; cada tela fica em até ~700 KB, em PNG ou, quando a
-tela tem foto ou degradê e o PNG passa disso, em JPEG leve), apagada ao fim. A IA devolve **só um JSON**; **o
-app valida e grava** o roteiro (a IA não escreve arquivo nenhum). Não usa chave de API: usa a **conta do
+`%APPDATA%\Claude\claude-code`), em modo **não interativo e restrito**: **sem ferramenta
+nenhuma** (nem leitura de arquivo), sem MCP, sem skills, sem ler as suas configurações, sem sessão salva, com
+tudo o que pediria permissão negado e com teto de gasto. As **telas vão reduzidas e dentro do próprio pedido**,
+na memória: nenhuma cópia delas é escrita no disco, e o Claude roda numa pasta temporária **vazia**, apagada ao
+fim (no máximo 40 telas, só PNGs de verdade e nada mais do teste; cada tela fica em até 400 KB, em PNG ou,
+quando tem foto ou degradê e o PNG passa disso, em JPEG leve). Com as imagens no pedido o Claude responde numa
+volta só, em vez de abrir uma imagem por vez: com 40 telas, **29 s em vez de 75 s**, e mais barato. A IA devolve
+**só um JSON**; **o app valida e grava** o roteiro (a IA não escreve arquivo nenhum). Durante o trabalho a linha
+de status mostra o tempo decorrido ("O Claude está analisando… · 0:42"). Não usa chave de API: usa a **conta do
 Claude Code** do senhor, que precisa estar conectada **uma vez** (`claude auth login`; o app oferece
 abrir o login na primeira vez e, quando o login termina, **continua sozinho** o que o senhor tinha pedido).
 **Use a conta da empresa.** O login abre o navegador padrão e entra na conta que ele já tiver aberta no
@@ -164,7 +167,7 @@ de propósito: o registro de testes e a leitura do Claude a ignoram.
 **Segurança.** O roteiro é um **rascunho da IA**: revise antes de executar. O app **valida tudo ao
 gravar e de novo ao ler** (tipos, tamanhos, IDs únicos, textos de uma linha sem caracteres de controle
 ou de direção, nomes de pasta simples); um roteiro adulterado é pulado, e nada inválido é gravado.
-Como a IA só tem `Read` numa pasta com imagens, texto escondido numa tela no máximo distorce o roteiro:
+Como a IA não tem ferramenta nenhuma, texto escondido numa tela no máximo distorce o roteiro:
 não alcança arquivos, comandos nem a rede. **Atenção à rede:** nestes fluxos (o roteiro e o **Gerar
 relatório** de Meus testes) o app **inicia um processo (o Claude Code) que se conecta à Anthropic**; a
 medição de "zero conexões externas" abaixo vale para o app e a extensão sem esses fluxos, e a TI precisa
