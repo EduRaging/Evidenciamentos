@@ -167,7 +167,7 @@ def _geracao_automatica() -> str:
         trabalho.mkdir()
         mapa = ia_local.preparar_pasta_de_trabalho(testes, trabalho)
         copiadas = sorted(p.name for p in trabalho.rglob("*") if p.is_file())
-        if not mapa or copiadas != [f"{n:02d}.png" for n, _ in mapa["t1"][1]]:
+        if not mapa or copiadas != [nome for _, nome in mapa["t1"][1]]:
             raise AssertionError(f"pasta de trabalho inesperada: {copiadas}")
     resposta = ia_local.extrair_resposta('{"is_error": false, "structured_output": {"casos": []}}')
     if "casos" not in resposta:

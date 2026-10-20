@@ -8,7 +8,6 @@ de evidências do app; nada fora dela é lido ou escrito, e nenhum arquivo é so
 """
 from __future__ import annotations
 
-import io
 import os
 from datetime import datetime
 from functools import wraps
@@ -18,10 +17,9 @@ from typing import Any
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from PIL import Image as PILImage
 
 from . import ciclos, gravacao, metadados
-from .imagens import abrir_png
+from .imagens import reduzir_para_ia
 from .metadados import PastaTeste
 from .prompt_ciclo import montar_prompt_roteiro
 from .prompt_ia import SAIDAS, Formulario, montar_prompt
@@ -169,12 +167,9 @@ def ver_evidencia(teste: str, numero: int) -> Image:
     caminho = _caminho_da_evidencia(dados, ev)
     if caminho is None:
         raise ValueError(f"O arquivo da evidência {numero} não foi encontrado na pasta do teste.")
-    with abrir_png(caminho) as original:  # só PNG e com limite de pixels (ver imagens.py)
-        original.thumbnail((LADO_MAXIMO, LADO_MAXIMO), PILImage.Resampling.LANCZOS)
-        reduzida = original.convert("RGB")  # converte DEPOIS de reduzir: poupa memória
-    saida = io.BytesIO()
-    reduzida.save(saida, "PNG", optimize=True)
-    return Image(data=saida.getvalue(), format="png")
+    # só PNG e com limite de pixels; acima de ~700 KB o Claude desktop recusa a imagem, então vira JPEG (imagens.py)
+    imagem, formato = reduzir_para_ia(caminho, LADO_MAXIMO)
+    return Image(data=imagem, format=formato)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,

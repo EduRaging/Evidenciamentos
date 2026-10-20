@@ -132,6 +132,20 @@ class PastaDeTrabalho(unittest.TestCase):
             self.assertEqual(max(img.size), ia_local.LADO_MAXIMO)
         self.assertEqual(mapa, {"t1": (pasta.name, [(1, "01.png"), (2, "02.png")])})
 
+    def test_tela_pesada_vai_como_jpeg_leve_e_o_nome_do_arquivo_acompanha(self):
+        from tests.test_imagens import tela_com_foto
+        sessao = Sessao(self.raiz / "trab_pesada")
+        sessao.adicionar(tela_com_foto(), "tela")
+        sessao.adicionar(Image.new("RGB", (800, 600), "navy"), "tela")
+        pasta = sessao.finalizar("Login com foto", "QA", self.base)
+        destino = self.raiz / "trabalho"
+        destino.mkdir()
+        mapa = ia_local.preparar_pasta_de_trabalho(self.criar_testes(pasta), destino)
+        self.assertEqual(mapa, {"t1": (pasta.name, [(1, "01.jpg"), (2, "02.png")])})
+        self.assertLess((destino / "t1" / "01.jpg").stat().st_size, 1_000_000)
+        with Image.open(destino / "t1" / "01.jpg") as img:
+            self.assertEqual(img.format, "JPEG")
+
     def test_telas_pequenas_nao_sao_ampliadas(self):
         pasta = self.criar("Login", 1, (300, 200))
         destino = self.raiz / "trabalho"

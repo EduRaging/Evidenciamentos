@@ -17,11 +17,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from PIL import Image
-
 from . import ciclos, fluxo_ciclo, gravacao, metadados
 from .ciclos import Ciclo
-from .imagens import abrir_png
+from .imagens import reduzir_para_ia
 from .metadados import PastaTeste
 from .prompt_ciclo import montar_prompt_roteiro_local
 from .prompt_ia import STATUS_SUGERIDOS, montar_prompt_relatorio_local
@@ -101,7 +99,7 @@ def _e_atalho(caminho: Path) -> bool:
 
 def preparar_pasta_de_trabalho(testes: list[PastaTeste], destino: Path,
                                max_imagens: int = MAX_IMAGENS) -> dict[str, tuple[str, list[tuple[int, str]]]]:
-    """Copia, reduzidas, as telas dos testes para `destino` (t1\\01.png, t2\\03.png…) e devolve o mapa usado no prompt.
+    """Copia, reduzidas, as telas dos testes para `destino` (t1\\01.png, t2\\03.jpg…) e devolve o mapa usado no prompt.
 
     Só PNGs de verdade e dentro da pasta do teste (nada de atalhos); nenhum outro arquivo do teste é copiado.
     """
@@ -118,10 +116,9 @@ def preparar_pasta_de_trabalho(testes: list[PastaTeste], destino: Path,
             try:
                 if _e_atalho(origem) or origem.resolve().parent != teste.pasta.resolve():
                     continue
-                with abrir_png(origem) as original:
-                    original.thumbnail((LADO_MAXIMO, LADO_MAXIMO), Image.Resampling.LANCZOS)
-                    nome = f"{ev.numero:02d}.png"
-                    original.convert("RGB").save(destino / sub / nome, "PNG", optimize=True)
+                dados, formato = reduzir_para_ia(origem, LADO_MAXIMO)  # PNG; JPEG só se o PNG ficar pesado demais
+                nome = f"{ev.numero:02d}.{'jpg' if formato == 'jpeg' else 'png'}"
+                (destino / sub / nome).write_bytes(dados)
                 copiadas.append((ev.numero, nome))
             except (OSError, ValueError):
                 continue

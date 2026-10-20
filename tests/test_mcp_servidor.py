@@ -68,6 +68,18 @@ class FerramentasDoServidor(unittest.TestCase):
         self.assertEqual(max(grande.size), self.srv.LADO_MAXIMO)
         self.assertEqual(pequena.size, (640, 420))
 
+    def test_ver_evidencia_de_tela_pesada_cabe_no_limite_de_1_mb_do_claude_desktop(self):
+        from capturador.sessao import Sessao
+        from tests.test_imagens import tela_com_foto
+
+        sessao = Sessao(self.base / "_trab_pesada")
+        sessao.adicionar(tela_com_foto(), "tela")
+        pasta = sessao.finalizar("Login com foto", "QA", self.base)
+        conteudo = self.srv.ver_evidencia(pasta.name, 1).to_image_content()
+        self.assertEqual(conteudo.mime_type, "image/jpeg")
+        self.assertLess(len(conteudo.data), 1_000_000)  # `data` já é o base64: é o que passa pelo protocolo
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(conteudo.data))).format, "JPEG")
+
     def test_nao_sai_da_pasta_de_evidencias(self):
         for entrada in ("..", "../..", "C:\\Windows", "a/b", "a\\b", "", "   ", "nao_existe", "_em_andamento"):
             with self.subTest(entrada=entrada):

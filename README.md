@@ -122,7 +122,8 @@ jeito de sempre; daí em diante é **automático**, até a hora de executar e ev
 `%APPDATA%\Claude\claude-code`), em modo **não interativo e restrito**: só a ferramenta `Read`, sem
 MCP, sem skills, sem ler as suas configurações, sem sessão salva, com tudo o que pediria permissão
 negado e com teto de gasto. Ele roda numa **pasta temporária** que tem só **cópias reduzidas das telas**
-(no máximo 40; PNGs de verdade, nada mais do teste), apagada ao fim. A IA devolve **só um JSON**; **o
+(no máximo 40; só PNGs de verdade e nada mais do teste; cada tela fica em até ~700 KB, em PNG ou, quando a
+tela tem foto ou degradê e o PNG passa disso, em JPEG leve), apagada ao fim. A IA devolve **só um JSON**; **o
 app valida e grava** o roteiro (a IA não escreve arquivo nenhum). Não usa chave de API: usa a **conta do
 Claude Code** do senhor, que precisa estar conectada **uma vez** (`claude auth login`; o app oferece
 abrir o login na primeira vez).
@@ -257,7 +258,7 @@ computador (com as imagens anexadas), sem depender de a IA gerar arquivos.
 |---|---|
 | `listar_testes` | lista os testes finalizados mais recentes |
 | `obter_teste` | dados do teste e a lista numerada de evidências |
-| `ver_evidencia` | devolve a imagem de uma evidência para a IA olhar (reduzida a no máximo 1568 px) |
+| `ver_evidencia` | devolve a imagem de uma evidência para a IA olhar (reduzida a no máximo 1568 px e ~700 KB: o Claude desktop recusa imagem acima de 1 MB, então telas com foto vão em JPEG) |
 | `salvar_relatorio_pdf` | grava o relatório (Markdown) em PDF + `.md` na pasta do teste |
 | `salvar_casos` | grava o roteiro de testes (os casos) de um **ciclo** em `_ciclos\<ciclo>\roteiro-NNN.json` (veja "Ciclos de teste") |
 
