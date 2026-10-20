@@ -512,5 +512,70 @@ class GerarRelatorio(unittest.TestCase):
         self.assertIn("preparar as telas", str(erro.exception))
 
 
+
+class EsperarOLogin(unittest.TestCase):
+    """Depois do login o app continua sozinho: precisa saber quando a janela do login fechou e em que conta ficou."""
+
+    CONTA = {"loggedIn": True, "email": "ana@empresa.com.br", "orgName": "Empresa"}
+
+    class Processo:
+        def __init__(self, termina_em=0):
+            self.consultas, self.termina_em = 0, termina_em
+
+        def poll(self):
+            self.consultas += 1
+            return 0 if self.consultas > self.termina_em else None
+
+    def espera(self, processo, verificar, tempo_limite=600):
+        relogio = [0.0]
+
+        def dormir(segundos):
+            relogio[0] += segundos
+
+        return ia_local.esperar_login(processo, Path("claude.exe"), tempo_limite, verificar, dormir, lambda: relogio[0])
+
+    def test_situacao_traz_a_conta_quando_ha_login_e_vazio_quando_nao(self):
+        def com_login(*a, **k):
+            return mock.Mock(stdout=json.dumps(self.CONTA))
+
+        def sem_login(*a, **k):
+            return mock.Mock(stdout=json.dumps({"loggedIn": False, "authMethod": "none"}))
+
+        def quebrado(*a, **k):
+            raise subprocess.TimeoutExpired("claude", 30)
+
+        self.assertEqual(ia_local.situacao_login(Path("c.exe"), com_login)["email"], "ana@empresa.com.br")
+        self.assertEqual(ia_local.situacao_login(Path("c.exe"), sem_login), {})
+        self.assertEqual(ia_local.situacao_login(Path("c.exe"), quebrado), {})
+        self.assertTrue(ia_local.esta_logado(Path("c.exe"), com_login))
+        self.assertFalse(ia_local.esta_logado(Path("c.exe"), sem_login))
+
+    def test_abrir_login_devolve_o_processo_para_o_app_esperar(self):
+        processo = object()
+        self.assertIs(ia_local.abrir_login(Path("claude.exe"), lambda *a, **k: processo), processo)
+
+    def test_devolve_a_conta_assim_que_a_janela_do_login_fecha(self):
+        consultas = []
+        processo = self.Processo(termina_em=3)
+        conta = self.espera(processo, lambda exe: consultas.append(exe) or self.CONTA)
+        self.assertEqual(conta["email"], "ana@empresa.com.br")
+        self.assertEqual(len(consultas), 1)  # não consulta a conta enquanto a janela do login está aberta
+
+    def test_a_conta_pode_demorar_um_instante_a_aparecer(self):
+        respostas = iter([{}, {}, self.CONTA])
+        conta = self.espera(self.Processo(), lambda exe: next(respostas))
+        self.assertEqual(conta["orgName"], "Empresa")
+
+    def test_login_fechado_sem_conta_devolve_vazio_depois_de_tres_tentativas(self):
+        consultas = []
+        conta = self.espera(self.Processo(), lambda exe: consultas.append(1) or {})
+        self.assertEqual((conta, len(consultas)), ({}, 3))
+
+    def test_desiste_depois_do_tempo_limite_se_a_janela_nunca_fecha(self):
+        consultas = []
+        conta = self.espera(self.Processo(termina_em=10**9), lambda exe: consultas.append(1) or self.CONTA, tempo_limite=30)
+        self.assertEqual((conta, consultas), ({}, []))
+
+
 if __name__ == "__main__":
     unittest.main()

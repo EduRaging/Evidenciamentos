@@ -126,7 +126,12 @@ negado e com teto de gasto. Ele roda numa **pasta temporária** que tem só **c�
 tela tem foto ou degradê e o PNG passa disso, em JPEG leve), apagada ao fim. A IA devolve **só um JSON**; **o
 app valida e grava** o roteiro (a IA não escreve arquivo nenhum). Não usa chave de API: usa a **conta do
 Claude Code** do senhor, que precisa estar conectada **uma vez** (`claude auth login`; o app oferece
-abrir o login na primeira vez).
+abrir o login na primeira vez e, quando o login termina, **continua sozinho** o que o senhor tinha pedido).
+**Use a conta da empresa.** O login abre o navegador padrão e entra na conta que ele já tiver aberta no
+claude.ai; se for a pessoal, feche essa sessão, use uma janela anônima ou rode no terminal
+`claude auth login --claudeai --sso --email <e-mail da empresa>` (o caminho do `claude.exe` está em
+`%APPDATA%\\Claude\\claude-code\\<versão>\\<id>`). `claude auth status` mostra a conta conectada
+(`email`, `orgName`); se estiver na errada, `claude auth logout` e repita.
 
 **Autorização.** As telas **saem do computador** nesse momento. Na primeira geração (de roteiro ou de
 relatório) o app pergunta se pode enviá-las (e lembra de dados sensíveis e da política da empresa); a
@@ -163,9 +168,11 @@ Como a IA só tem `Read` numa pasta com imagens, texto escondido numa tela no m�
 não alcança arquivos, comandos nem a rede. **Atenção à rede:** nestes fluxos (o roteiro e o **Gerar
 relatório** de Meus testes) o app **inicia um processo (o Claude Code) que se conecta à Anthropic**; a
 medição de "zero conexões externas" abaixo vale para o app e a extensão sem esses fluxos, e a TI precisa
-saber disso. O modo restrito foi aceito pelo Claude Code instalado (versão 2.1.299), mas o caminho de
-sucesso real depende do login do senhor e **ainda não foi exercitado com o Claude de verdade** (só com
-um Claude Code simulado, que exercita a janela, as threads, a validação e a gravação do PDF).
+saber disso. O modo restrito foi aceito pelo Claude Code instalado (versão 2.1.299). Em 20/10/2026 o
+**relatório** foi exercitado com o Claude de verdade, só com duas telas fictícias geradas para o teste: 19 s,
+resposta no formato esperado, texto das telas lido e PDF com as imagens anexadas. O **roteiro** do ciclo só
+foi exercitado com um Claude Code simulado (a janela, as threads, a validação e a gravação), mas usa o mesmo
+caminho.
 
 **Plano B (manual) e a extensão.** Pelo Claude desktop, a extensão ganhou a ferramenta `salvar_casos`,
 que só grava `roteiro-NNN.json` dentro de `_ciclos\<ciclo>`, só em pasta com `ciclo.json` válido, com

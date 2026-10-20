@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -67,19 +68,48 @@ def localizar_claude(raizes: list[Path] | None = None) -> Path | None:
     return Path(achado) if achado else None
 
 
-def esta_logado(exe: Path, executar: Callable = subprocess.run) -> bool:
-    """`claude auth status` diz se há uma conta conectada. Qualquer dúvida conta como "não"."""
+def situacao_login(exe: Path, executar: Callable = subprocess.run) -> dict:
+    """O que `claude auth status` informa (conta, e-mail, organização), ou {} se não há conta ou algo deu errado."""
     try:
         r = executar([str(exe), "auth", "status"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                      creationflags=SEM_JANELA)
-        return bool(json.loads(r.stdout).get("loggedIn"))
+        dados = json.loads(r.stdout)
     except (OSError, ValueError, subprocess.SubprocessError, AttributeError):
-        return False
+        return {}
+    return dados if isinstance(dados, dict) and dados.get("loggedIn") else {}
 
 
-def abrir_login(exe: Path, abrir: Callable = subprocess.Popen) -> None:
-    """Abre o login do Claude Code numa janela de console VISÍVEL (o navegador abre para o usuário entrar)."""
-    abrir([str(exe), "auth", "login", "--claudeai"], creationflags=NOVO_CONSOLE)
+def esta_logado(exe: Path, executar: Callable = subprocess.run) -> bool:
+    """`claude auth status` diz se há uma conta conectada. Qualquer dúvida conta como "não"."""
+    return bool(situacao_login(exe, executar))
+
+
+def abrir_login(exe: Path, abrir: Callable = subprocess.Popen):
+    """Abre o login do Claude Code numa janela de console VISÍVEL (o navegador abre para o usuário entrar).
+
+    Devolve o processo, para o app saber quando o login terminou (`esperar_login`).
+    """
+    return abrir([str(exe), "auth", "login", "--claudeai"], creationflags=NOVO_CONSOLE)
+
+
+def esperar_login(processo, exe: Path, tempo_limite: float = 600, verificar: Callable = situacao_login,
+                  dormir: Callable = time.sleep, agora: Callable = time.monotonic) -> dict:
+    """Espera o processo do login terminar e devolve a situação da conta ({} se não ficou conectado a tempo).
+
+    Só consulta a conta depois que a janela do login fecha; mesmo então tenta mais duas vezes, porque a conta pode
+    levar um instante para aparecer. Roda numa thread: nunca chame na interface.
+    """
+    limite = agora() + tempo_limite
+    while agora() < limite:
+        if processo.poll() is not None:
+            for _ in range(3):
+                conta = verificar(exe)
+                if conta:
+                    return conta
+                dormir(2)
+            return {}
+        dormir(1)
+    return {}
 
 
 # --- as telas viram cópias reduzidas numa pasta temporária ---------------------------------------

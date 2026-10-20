@@ -368,8 +368,11 @@ class App:
         self.painel_ciclos.selecionar(ciclo.pasta)
         self._gerar_roteiro(ciclo)
 
-    def _pronto_para_ia(self, status, telas: int, o_que: str) -> Path | None:
-        """Confere o Claude Code, a autorização e o login. Devolve o executável, ou None (com a explicação em `status`)."""
+    def _pronto_para_ia(self, status, telas: int, o_que: str, retomar) -> Path | None:
+        """Confere o Claude Code, a autorização e o login. Devolve o executável, ou None (com a explicação em `status`).
+
+        `retomar` refaz o pedido do usuário: se faltar o login, o app o oferece e, quando termina, continua sozinho.
+        """
         exe = ia_local.localizar_claude()
         if exe is None:
             status("Não achei o Claude Code neste computador (ele vem junto com o Claude desktop: abra o Claude desktop "
@@ -380,7 +383,7 @@ class App:
                    "no Claude desktop.")
             return None
         if not ia_local.esta_logado(exe):
-            self._oferecer_login(exe, status)
+            self._oferecer_login(exe, status, retomar)
             return None
         return exe
 
@@ -392,7 +395,8 @@ class App:
             return
         testes, _ = fluxo_ciclo.testes_de_referencia(ciclo, self.cfg.pasta_base)
         telas = min(ia_local.MAX_IMAGENS, sum(len(t.evidencias) for t in testes))
-        exe = self._pronto_para_ia(painel.var_status.set, telas, "os dados do ciclo (nome, objetivo, escopo)")
+        exe = self._pronto_para_ia(painel.var_status.set, telas, "os dados do ciclo (nome, objetivo, escopo)",
+                                   lambda: self._gerar_roteiro(ciclo))
         if exe is None:
             return
         controle = ia_local.Controle()
@@ -442,7 +446,8 @@ class App:
         if not testes:
             return
         telas = min(ia_local.MAX_IMAGENS, sum(len(t.evidencias) for t in testes))
-        exe = self._pronto_para_ia(self._status_relatorio, telas, "o nome, o testador e as datas dos testes")
+        exe = self._pronto_para_ia(self._status_relatorio, telas, "o nome, o testador e as datas dos testes",
+                                   lambda: self._gerar_relatorios(pastas))
         if exe is None:
             return
         controle = ia_local.Controle()
@@ -464,7 +469,8 @@ class App:
                 except ia_local.Cancelado:
                     break
                 except ia_local.NaoLogado as exc:
-                    self._fila_ia.put(("relatorio", "nao_logado", teste, None, str(exc)))
+                    # o login caiu no meio: volta com este teste e os que faltavam
+                    self._fila_ia.put(("relatorio", "nao_logado", teste, [t.pasta for t in testes[i - 1:]], str(exc)))
                     break
                 except ia_local.ErroIA as exc:
                     self._fila_ia.put(("relatorio", "erro", teste, None, str(exc)))
@@ -502,19 +508,24 @@ class App:
         config.salvar(self.cfg)
         self.painel_ciclos.var_status.set("Autorização revogada: da próxima vez o app volta a perguntar antes de enviar telas.")
 
-    def _oferecer_login(self, exe, status) -> None:
+    def _oferecer_login(self, exe, status, retomar=None) -> None:
+        """Oferece conectar ao Claude; quando o login termina, o app confere a conta e continua o pedido sozinho."""
         if messagebox.askyesno(
                 "Conectar ao Claude",
                 "Para gerar o roteiro e o relatório sozinho o app usa o Claude Code instalado neste computador, que "
                 "ainda não está conectado à sua conta do Claude.\n\nConectar agora? Abre uma janela e o navegador para "
                 "o senhor entrar (é uma vez só).", parent=self.raiz):
             try:
-                ia_local.abrir_login(exe)
+                processo = ia_local.abrir_login(exe)
             except OSError as exc:
                 messagebox.showerror("Não foi possível abrir o login", str(exc), parent=self.raiz)
                 return
-            status("Termine o login na janela que abriu e no navegador; depois peça de novo (“Gerar roteiro com o "
-                   "Claude” ou “Gerar relatório”).")
+            status("Termine o login no navegador (use a conta da empresa); o app continua sozinho quando terminar.")
+
+            def esperar() -> None:  # thread: só espera e devolve o resultado pela fila
+                self._fila_ia.put(("login", "", retomar, (status, ia_local.esperar_login(processo, exe)), ""))
+
+            threading.Thread(target=esperar, daemon=True, name="esperar-login").start()
         else:
             status("Sem a conexão a geração automática não funciona. Em Mais ▾ há o pedido manual no Claude desktop.")
 
@@ -525,6 +536,8 @@ class App:
                 tipo, resultado, objeto, valor, mensagem = self._fila_ia.get_nowait()
                 if tipo == "roteiro":
                     self._resultado_roteiro(resultado, objeto, valor, mensagem)
+                elif tipo == "login":
+                    self._resultado_login(objeto, *valor)
                 else:
                     self._resultado_relatorio(resultado, objeto, valor, mensagem)
         except queue.Empty:
@@ -535,6 +548,16 @@ class App:
             mostrar_aviso(self.raiz, texto, (0, 0, self.raiz.winfo_screenwidth(), self.raiz.winfo_screenheight()))
         except tk.TclError:
             pass
+
+    def _resultado_login(self, retomar, status, conta: dict) -> None:
+        """O login terminou: mostra em que conta ficou e continua o que o usuário tinha pedido."""
+        if not conta:
+            status("Não consegui confirmar a conexão ao Claude. Peça de novo para tentar outra vez.")
+            return
+        quem = conta.get("email") or "a sua conta"
+        status(f"Conectado ao Claude como {quem}. Continuando…")
+        if retomar is not None:
+            retomar()
 
     def _resultado_roteiro(self, resultado: str, ciclo, casos: int, mensagem: str) -> None:
         self._gerando.pop(ciclo.pasta, None)
@@ -548,7 +571,7 @@ class App:
         elif resultado == "nao_logado":
             exe = ia_local.localizar_claude()
             if exe is not None:
-                self._oferecer_login(exe, painel.var_status.set)
+                self._oferecer_login(exe, painel.var_status.set, lambda: self._gerar_roteiro(ciclo))
         else:
             painel.var_status.set("Não foi possível gerar o roteiro.")
             messagebox.showwarning(
@@ -570,7 +593,7 @@ class App:
                 lote["prontos"] += 1
                 self.painel_pdfs.atualizar()
             elif resultado == "nao_logado":
-                lote["nao_logado"] = True
+                lote["nao_logado"] = valor  # as pastas que ainda faltam, para retomar depois do login
             else:
                 lote["falhas"].append((teste.nome_teste, mensagem))
             return
@@ -583,7 +606,8 @@ class App:
         if lote["nao_logado"]:
             exe = ia_local.localizar_claude()
             if exe is not None:
-                self._oferecer_login(exe, self._status_relatorio)
+                faltam = lote["nao_logado"]
+                self._oferecer_login(exe, self._status_relatorio, lambda: self._gerar_relatorios(faltam))
             return
         if prontos:
             self._status_relatorio(f"{prontos} {'relatório pronto' if prontos == 1 else 'relatórios prontos'} em "
