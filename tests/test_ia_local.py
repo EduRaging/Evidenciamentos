@@ -5,6 +5,8 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -328,6 +330,18 @@ class Execucao(unittest.TestCase):
             ia_local.executar(Path("claude.exe"), "x", self.pasta, controle, FabricaDeProcessos(processo))
         self.assertTrue(processo.terminado)
 
+    def test_cancelamento_que_chega_entre_abrir_o_processo_e_guarda_lo_tambem_o_encerra(self):
+        controle = ia_local.Controle()
+        processo = ProcessoFalso(saida_ok())
+
+        def abrir(comando, **opcoes):
+            controle.cancelar()  # o processo ainda não foi guardado no controle: cancelar() não o alcança
+            return processo
+
+        with self.assertRaises(ia_local.Cancelado):
+            ia_local.executar(Path("claude.exe"), "x", self.pasta, controle, abrir)
+        self.assertTrue(processo.terminado)
+
     def test_saida_vazia_mostra_o_erro_do_processo(self):
         with self.assertRaises(ia_local.ErroIA) as erro:
             ia_local.executar(Path("claude.exe"), "x", self.pasta,
@@ -543,29 +557,157 @@ class GerarRelatorio(unittest.TestCase):
 
 
 
-class FabricaEmSequencia:
-    """Substitui subprocess.Popen: cada chamada devolve o próximo processo falso (parte 1, parte 2... e a junção)."""
+class _ProcessoDoPedido:
+    """O processo que a FabricaPorPedido entrega: só decide quem responde quando recebe o pedido (`communicate`)."""
 
-    def __init__(self, *processos):
-        self.processos, self.chamadas = list(processos), []
+    def __init__(self, fabrica):
+        self.fabrica, self.terminado, self.escolhido = fabrica, False, None
+
+    def communicate(self, entrada=None, timeout=None):
+        self.escolhido = self.fabrica.escolher(entrada)
+        if self.terminado:  # encerrado entre abrir o processo e entregar o pedido
+            self.escolhido.terminate()
+        return self.fabrica.responder(self.escolhido, entrada, timeout)
+
+    def terminate(self):
+        self.terminado = True
+        if self.escolhido is not None:
+            self.escolhido.terminate()
+
+    def kill(self):
+        self.terminate()
+
+
+class FabricaPorPedido:
+    """Substitui subprocess.Popen quando as chamadas rodam AO MESMO TEMPO e a ordem não é fixa.
+
+    Quem responde é escolhido pelo texto do pedido ("PARTE 2 de 3"...), e a fábrica conta quantas chamadas estão
+    em andamento juntas (`maximo`).
+    """
+
+    def __init__(self, respostas: dict):
+        self.respostas = respostas  # trecho do pedido -> processo falso que responde a ele
+        self.chamadas, self.entradas = [], {}
+        self.agora = self.maximo = 0
+        self._trava = threading.Lock()
 
     def __call__(self, comando, **opcoes):
-        self.chamadas.append((comando, opcoes))
-        return self.processos[len(self.chamadas) - 1]
+        with self._trava:
+            self.chamadas.append((comando, opcoes))
+        return _ProcessoDoPedido(self)
+
+    def escolher(self, entrada):
+        chave = next((c for c in self.respostas if c in entrada), None)
+        if chave is None:
+            raise AssertionError("pedido inesperado: " + entrada[:200])
+        with self._trava:
+            self.entradas[chave] = entrada
+        return self.respostas[chave]
+
+    def responder(self, processo, entrada, timeout):
+        with self._trava:
+            self.agora += 1
+            self.maximo = max(self.maximo, self.agora)
+        try:
+            return processo.communicate(entrada, timeout)
+        finally:
+            with self._trava:
+                self.agora -= 1
+
+
+class ProcessoNaBarreira(ProcessoFalso):
+    """Só responde quando todas as chamadas esperadas chegaram: prova que elas rodam ao mesmo tempo."""
+
+    def __init__(self, stdout, barreira):
+        super().__init__(stdout)
+        self.barreira = barreira
+
+    def communicate(self, entrada=None, timeout=None):
+        self.barreira.wait(timeout=10)  # BrokenBarrierError se as partes não estiverem em andamento juntas
+        return super().communicate(entrada, timeout)
+
+
+class ProcessoDemorado(ProcessoFalso):
+    def communicate(self, entrada=None, timeout=None):
+        time.sleep(0.4)
+        return super().communicate(entrada, timeout)
+
+
+class ProcessoQueEsperaSerEncerrado(ProcessoFalso):
+    """Fica preso até o app o encerrar (terminate): imita um Claude ainda trabalhando."""
+
+    def __init__(self):
+        super().__init__("")
+        self.comecou, self.encerrado = threading.Event(), threading.Event()
+
+    def communicate(self, entrada=None, timeout=None):
+        self.comecou.set()
+        self.encerrado.wait(timeout=10)
+        return self.stdout, self.stderr
+
+    def terminate(self):
+        self.terminado = True
+        self.encerrado.set()
 
 
 def relato(status, texto):
     return ProcessoFalso(saida_ok({"status_sugerido": status, "resumo": f"resumo de {texto}", "relatorio_markdown": texto}))
 
 
-def conteudo_do_pedido(processo):
-    return json.loads(processo.entrada)["message"]["content"]
+def conteudo_do_pedido(entrada):
+    return json.loads(entrada)["message"]["content"]
 
 
-def telas_do_pedido(processo):
+def telas_do_pedido(entrada):
     """Os números das evidências que foram dentro do pedido (os rótulos 'Evidência N:' que antecedem cada imagem)."""
-    return [int(re.search(r"\d+", c["text"]).group()) for c in conteudo_do_pedido(processo)
+    return [int(re.search(r"\d+", c["text"]).group()) for c in conteudo_do_pedido(entrada)
             if c["type"] == "text" and c["text"].startswith("Evidência")]
+
+
+JUNCAO = "## Relatórios das partes"  # só o pedido que junta as partes tem este título
+
+
+class ControleDeVarias(unittest.TestCase):
+    """Uma geração com várias chamadas ao mesmo tempo: o pai cancela todas, o filho só a sua."""
+
+    class Processo:
+        def __init__(self):
+            self.terminado = False
+
+        def terminate(self):
+            self.terminado = True
+
+    def test_cancelar_o_pai_cancela_os_filhos_e_encerra_os_processos(self):
+        pai = ia_local.Controle()
+        filhos = [pai.derivar() for _ in range(3)]
+        processos = [self.Processo() for _ in filhos]
+        for filho, processo in zip(filhos, processos):
+            filho.processo = processo
+        pai.cancelar()
+        self.assertTrue(pai.cancelado and all(f.cancelado for f in filhos))
+        self.assertTrue(all(p.terminado for p in processos))
+
+    def test_cancelar_um_filho_nao_cancela_o_pai_nem_os_irmaos(self):
+        pai = ia_local.Controle()
+        um, outro = pai.derivar(), pai.derivar()
+        um.cancelar()
+        self.assertEqual((pai.cancelado, um.cancelado, outro.cancelado), (False, True, False))
+
+    def test_filho_criado_depois_do_cancelamento_ja_nasce_cancelado(self):
+        pai = ia_local.Controle()
+        pai.cancelar()
+        self.assertTrue(pai.derivar().cancelado)
+
+    def test_cancelar_de_varias_threads_ao_mesmo_tempo_nao_se_perde(self):
+        pai = ia_local.Controle()
+        filhos = []
+        trabalhadores = [threading.Thread(target=lambda: filhos.append(pai.derivar())) for _ in range(20)]
+        trabalhadores.append(threading.Thread(target=pai.cancelar))
+        for t in trabalhadores:
+            t.start()
+        for t in trabalhadores:
+            t.join()
+        self.assertTrue(all(f.cancelado for f in filhos))  # quem nasceu antes foi cancelado; quem nasceu depois, já nasceu assim
 
 
 class DividirEmPartes(unittest.TestCase):
@@ -592,7 +734,7 @@ class DividirEmPartes(unittest.TestCase):
 
 
 class GerarRelatorioEmPartes(unittest.TestCase):
-    """Teste com mais telas do que cabem num pedido: nenhuma fica de fora (partes, e uma chamada que junta)."""
+    """Teste com mais telas do que cabem num pedido: nenhuma fica de fora (partes ao mesmo tempo, e uma chamada que junta)."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -610,27 +752,27 @@ class GerarRelatorioEmPartes(unittest.TestCase):
     def gerar(self, fabrica, **extra):
         return ia_local.gerar_relatorio(self.teste, self.base, Path("claude.exe"), abrir_processo=fabrica, **extra)
 
-    def partes(self):
-        return [relato("Aprovado", "TEXTO-A"), relato("Inconclusivo", "TEXTO-B"), relato("Aprovado", "TEXTO-C")]
+    def respostas(self, juncao=None, a="TEXTO-A", b="TEXTO-B", c="TEXTO-C"):
+        return {"PARTE 1 de 3": relato("Aprovado", a), "PARTE 2 de 3": relato("Inconclusivo", b),
+                "PARTE 3 de 3": relato("Aprovado", c), JUNCAO: juncao or relato("Inconclusivo", "RELATORIO-UNICO")}
 
     def test_todas_as_telas_vao_uma_so_vez_e_com_o_numero_real(self):
-        partes, juncao = self.partes(), relato("Inconclusivo", "RELATORIO-UNICO")
-        fabrica = FabricaEmSequencia(*partes, juncao)
+        fabrica = FabricaPorPedido(self.respostas())
         self.gerar(fabrica)
-        self.assertEqual([telas_do_pedido(p) for p in partes], [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10]])
-        self.assertEqual(len(fabrica.chamadas), 4)
-        self.assertIn("PARTE 2 de 3", conteudo_do_pedido(partes[1])[0]["text"])
+        self.assertEqual([telas_do_pedido(fabrica.entradas[f"PARTE {k} de 3"]) for k in (1, 2, 3)],
+                         [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10]])
+        self.assertEqual(len(fabrica.chamadas), 4)  # três partes e a junção
 
     def test_a_juncao_recebe_so_texto_com_as_tres_partes(self):
-        partes, juncao = self.partes(), relato("Inconclusivo", "RELATORIO-UNICO")
-        self.gerar(FabricaEmSequencia(*partes, juncao))
-        conteudo = conteudo_do_pedido(juncao)
+        fabrica = FabricaPorPedido(self.respostas())
+        self.gerar(fabrica)
+        conteudo = conteudo_do_pedido(fabrica.entradas[JUNCAO])
         self.assertEqual([c["type"] for c in conteudo], ["text"])  # nenhuma imagem na junção
         for esperado in ("TEXTO-A", "TEXTO-B", "TEXTO-C", "evidências 1 a 4", "evidências 5 a 8", "evidências 9 a 10"):
             self.assertIn(esperado, conteudo[0]["text"])
 
     def test_o_relatorio_gravado_e_o_da_juncao_com_as_dez_imagens_anexadas(self):
-        dados = self.gerar(FabricaEmSequencia(*self.partes(), relato("Inconclusivo", "RELATORIO-UNICO")))
+        dados = self.gerar(FabricaPorPedido(self.respostas()))
         texto = (self.teste / dados["markdown"]).read_text(encoding="utf-8")
         self.assertTrue(texto.startswith("**Status sugerido pela IA:** Inconclusivo"))
         self.assertIn("RELATORIO-UNICO", texto)
@@ -639,7 +781,7 @@ class GerarRelatorioEmPartes(unittest.TestCase):
         self.assertTrue((self.teste / dados["pdf"]).read_bytes().startswith(b"%PDF"))
 
     def test_todas_as_chamadas_sao_restritas_e_sem_ferramentas(self):
-        fabrica = FabricaEmSequencia(*self.partes(), relato("Aprovado", "UNICO"))
+        fabrica = FabricaPorPedido(self.respostas())
         self.gerar(fabrica)
         for comando, opcoes in fabrica.chamadas:
             self.assertEqual(comando[comando.index("--tools") + 1], "")
@@ -647,39 +789,71 @@ class GerarRelatorioEmPartes(unittest.TestCase):
             self.assertIn("--restricted", comando)
             self.assertFalse(Path(opcoes["cwd"]).exists())  # a pasta temporária de cada chamada some no fim
 
-    def test_o_andamento_diz_a_parte_e_depois_que_esta_juntando(self):
+    def test_cada_chamada_usa_a_sua_propria_pasta_temporaria(self):
+        fabrica = FabricaPorPedido(self.respostas())
+        self.gerar(fabrica)
+        pastas = [opcoes["cwd"] for _, opcoes in fabrica.chamadas]
+        self.assertEqual(len(set(pastas)), len(pastas))
+
+    def test_as_partes_rodam_ao_mesmo_tempo(self):
+        barreira = threading.Barrier(3)  # as três partes têm de estar em andamento juntas para qualquer uma responder
+        respostas = {f"PARTE {k} de 3": ProcessoNaBarreira(saida_ok({"status_sugerido": "Aprovado", "resumo": "",
+                                                                      "relatorio_markdown": f"T{k}"}), barreira)
+                     for k in (1, 2, 3)}
+        respostas[JUNCAO] = relato("Aprovado", "UNICO")
+        fabrica = FabricaPorPedido(respostas)
+        self.gerar(fabrica)
+        self.assertEqual(fabrica.maximo, 3)
+
+    def test_o_teto_de_partes_ao_mesmo_tempo_e_respeitado(self):
+        respostas = {f"PARTE {k} de 3": ProcessoDemorado(saida_ok({"status_sugerido": "Aprovado", "resumo": "",
+                                                                    "relatorio_markdown": f"T{k}"})) for k in (1, 2, 3)}
+        respostas[JUNCAO] = relato("Aprovado", "UNICO")
+        fabrica, etapas = FabricaPorPedido(respostas), []
+        with mock.patch.object(ia_local, "MAX_PARALELO", 2):
+            self.gerar(fabrica, progresso=etapas.append)
+        self.assertEqual(fabrica.maximo, 2)
+        self.assertEqual(etapas[0], "em 3 partes (2 por vez)")
+
+    def test_o_andamento_diz_quantas_partes_e_quantas_ja_ficaram_prontas(self):
         etapas = []
-        self.gerar(FabricaEmSequencia(*self.partes(), relato("Aprovado", "UNICO")), progresso=etapas.append)
-        self.assertEqual(etapas, ["parte 1 de 3", "parte 2 de 3", "parte 3 de 3", "juntando as partes"])
+        self.gerar(FabricaPorPedido(self.respostas()), progresso=etapas.append)
+        self.assertEqual(etapas, ["em 3 partes ao mesmo tempo", "1 de 3 partes prontas", "2 de 3 partes prontas",
+                                  "3 de 3 partes prontas", "juntando as partes"])
+
+    def test_o_progresso_so_e_chamado_pela_thread_de_quem_chamou(self):
+        threads = set()
+        self.gerar(FabricaPorPedido(self.respostas()), progresso=lambda _t: threads.add(threading.current_thread()))
+        self.assertEqual(threads, {threading.current_thread()})  # a interface não pode ser tocada pelas threads das partes
 
     def test_se_cabe_num_pedido_nao_ha_partes_nem_juncao_nem_andamento(self):
         etapas = []
         with mock.patch.object(ia_local, "MAX_IMAGENS", 10):
             processo = relato("Aprovado", "TEXTO-UNICO")
-            fabrica = FabricaEmSequencia(processo)
+            fabrica = FabricaDeProcessos(processo)
             dados = self.gerar(fabrica, progresso=etapas.append)
         self.assertEqual((len(fabrica.chamadas), etapas), (1, []))
-        self.assertEqual(telas_do_pedido(processo), list(range(1, 11)))
-        self.assertNotIn("PARTE", conteudo_do_pedido(processo)[0]["text"])
+        self.assertEqual(telas_do_pedido(processo.entrada), list(range(1, 11)))
+        self.assertNotIn("PARTE", conteudo_do_pedido(processo.entrada)[0]["text"])
         self.assertIn("TEXTO-UNICO", (self.teste / dados["markdown"]).read_text(encoding="utf-8"))
 
     def test_tela_ilegivel_numa_parte_continua_marcada_so_nela(self):
         (self.teste / "02_tela.png").write_bytes(b"lixo")
-        partes = self.partes()
+        fabrica = FabricaPorPedido(self.respostas())
         with mock.patch.object(ia_local.gravacao, "gravar_relatorio_pdf", return_value={}):  # aqui só importa o pedido
-            self.gerar(FabricaEmSequencia(*partes, relato("Aprovado", "UNICO")))
-        self.assertEqual([telas_do_pedido(p) for p in partes], [[1, 3, 4], [5, 6, 7, 8], [9, 10]])
-        self.assertIn("2. Tela inteira", conteudo_do_pedido(partes[0])[0]["text"])
-        self.assertIn("→ NÃO enviada", conteudo_do_pedido(partes[0])[0]["text"])
-        self.assertNotIn("NÃO enviada", conteudo_do_pedido(partes[1])[0]["text"])
+            self.gerar(fabrica)
+        entradas = [fabrica.entradas[f"PARTE {k} de 3"] for k in (1, 2, 3)]
+        self.assertEqual([telas_do_pedido(e) for e in entradas], [[1, 3, 4], [5, 6, 7, 8], [9, 10]])
+        self.assertIn("→ NÃO enviada", conteudo_do_pedido(entradas[0])[0]["text"])
+        self.assertNotIn("NÃO enviada", conteudo_do_pedido(entradas[1])[0]["text"])
 
     def test_se_o_claude_nao_junta_o_app_empilha_as_partes_e_avisa_no_documento(self):
-        for juncao in (ProcessoFalso("", "quebrou"),
-                       relato("Aprovado", "   "), ProcessoFalso("não é json")):
+        for juncao in (ProcessoFalso("", "quebrou"), relato("Aprovado", "   "), ProcessoFalso("não é json")):
             with self.subTest(juncao=juncao.stdout[:12]):
-                partes = [relato("Aprovado", "TEXTO-A"), relato("Reprovado", "TEXTO-B"), relato("Inconclusivo", "TEXTO-C")]
+                respostas = self.respostas(juncao=juncao)
+                respostas["PARTE 2 de 3"] = relato("Reprovado", "TEXTO-B")
                 with self.assertLogs("capturador.ia_local", level="WARNING"):
-                    dados = self.gerar(FabricaEmSequencia(*partes, juncao))
+                    dados = self.gerar(FabricaPorPedido(respostas))
                 texto = (self.teste / dados["markdown"]).read_text(encoding="utf-8")
                 self.assertTrue(texto.startswith("**Status sugerido pela IA:** Reprovado"))  # o pior das partes
                 self.assertIn("**Atenção:** o Claude não conseguiu reunir as 3 partes", texto)
@@ -689,47 +863,89 @@ class GerarRelatorioEmPartes(unittest.TestCase):
                 self.assertEqual(dados["evidencias_anexadas"], 10)
 
     def test_o_status_do_teste_na_falha_da_juncao_e_inconclusivo_sem_reprovada(self):
-        partes = [relato("Aprovado", "A"), relato("Aprovado", "B"), relato("Inconclusivo", "C")]
+        respostas = self.respostas(juncao=ProcessoFalso("", "quebrou"))
         with self.assertLogs("capturador.ia_local", level="WARNING"):
-            dados = self.gerar(FabricaEmSequencia(*partes, ProcessoFalso("", "quebrou")))
+            dados = self.gerar(FabricaPorPedido(respostas))
         self.assertTrue((self.teste / dados["markdown"]).read_text(encoding="utf-8").startswith(
             "**Status sugerido pela IA:** Inconclusivo"))
 
     def test_sem_login_na_juncao_nao_grava_nada(self):
         saida = json.dumps({"type": "result", "is_error": True, "result": "Not logged in · Please run /login"})
         with self.assertRaises(ia_local.NaoLogado):
-            self.gerar(FabricaEmSequencia(*self.partes(), ProcessoFalso(saida)))
+            self.gerar(FabricaPorPedido(self.respostas(juncao=ProcessoFalso(saida))))
         self.assertEqual(list(self.teste.glob("Relat*")), [])
 
-    def test_cancelar_entre_as_partes_para_na_hora_e_nao_grava_nada(self):
-        controle = ia_local.Controle()
-        partes = self.partes()
+    def test_sem_login_numa_parte_chega_como_sem_login_e_nao_vai_para_a_juncao(self):
+        saida = json.dumps({"type": "result", "is_error": True, "result": "Not logged in · Please run /login"})
+        respostas = self.respostas()
+        respostas["PARTE 2 de 3"] = ProcessoFalso(saida)
+        fabrica = FabricaPorPedido(respostas)
+        with self.assertRaises(ia_local.NaoLogado):
+            self.gerar(fabrica)
+        self.assertNotIn(JUNCAO, fabrica.entradas)
+        self.assertEqual(list(self.teste.glob("Relat*")), [])
 
-        class Cancela(FabricaEmSequencia):
+    def test_cancelar_durante_as_partes_para_tudo_e_nao_grava_nada(self):
+        controle = ia_local.Controle()
+
+        class Cancela(FabricaPorPedido):
             def __call__(self, comando, **opcoes):
                 processo = super().__call__(comando, **opcoes)
-                controle.cancelar()  # o usuário cancela durante a primeira parte
+                controle.cancelar()  # o usuário cancela assim que a primeira chamada abre
                 return processo
 
-        fabrica = Cancela(*partes, relato("Aprovado", "UNICO"))
+        fabrica = Cancela(self.respostas())
         with self.assertRaises(ia_local.Cancelado):
             self.gerar(fabrica, controle=controle)
-        self.assertEqual(len(fabrica.chamadas), 1)
+        self.assertNotIn(JUNCAO, fabrica.entradas)  # nem chegou a juntar
+        self.assertEqual(list(self.teste.glob("Relat*")), [])
+        self.assertTrue(controle.cancelado)
+
+    def test_cancelar_encerra_as_partes_que_estao_trabalhando(self):
+        lentas = {f"PARTE {k} de 3": ProcessoQueEsperaSerEncerrado() for k in (1, 2, 3)}
+        fabrica = FabricaPorPedido({**lentas, JUNCAO: relato("Aprovado", "UNICO")})
+        controle = ia_local.Controle()
+        erros = []
+
+        def trabalho():
+            try:
+                self.gerar(fabrica, controle=controle)
+            except Exception as exc:  # noqa: BLE001 - o teste confere o tipo logo abaixo
+                erros.append(exc)
+
+        thread = threading.Thread(target=trabalho)
+        inicio = time.monotonic()
+        thread.start()
+        for processo in lentas.values():
+            self.assertTrue(processo.comecou.wait(timeout=10))  # as três estão em andamento ao mesmo tempo
+        controle.cancelar()
+        thread.join(timeout=10)
+        self.assertFalse(thread.is_alive())
+        self.assertLess(time.monotonic() - inicio, 8)  # sem encerrar, cada uma ficaria presa os 10 s
+        self.assertTrue(all(p.terminado for p in lentas.values()))
+        self.assertIsInstance(erros[0], ia_local.Cancelado)
         self.assertEqual(list(self.teste.glob("Relat*")), [])
 
-    def test_falha_numa_parte_derruba_o_relatorio_sem_gravar_pela_metade(self):
-        fabrica = FabricaEmSequencia(relato("Aprovado", "TEXTO-A"), ProcessoFalso("", "quebrou"), relato("Aprovado", "C"))
-        with self.assertRaises(ia_local.ErroIA):
+    def test_falha_numa_parte_derruba_as_outras_na_hora_e_sobe_o_erro_dela(self):
+        presas = {f"PARTE {k} de 3": ProcessoQueEsperaSerEncerrado() for k in (2, 3)}
+        fabrica = FabricaPorPedido({"PARTE 1 de 3": ProcessoFalso("", "quebrou"), **presas, JUNCAO: relato("Aprovado", "U")})
+        inicio = time.monotonic()
+        with self.assertRaises(ia_local.ErroIA) as erro:
             self.gerar(fabrica)
-        self.assertEqual(len(fabrica.chamadas), 2)
+        self.assertIn("quebrou", str(erro.exception))  # o erro da parte que falhou, não o "cancelado" das outras
+        self.assertNotIsInstance(erro.exception, ia_local.Cancelado)
+        self.assertLess(time.monotonic() - inicio, 8)
+        for processo in presas.values():
+            if processo.comecou.is_set():
+                self.assertTrue(processo.terminado)
+        self.assertNotIn(JUNCAO, fabrica.entradas)
         self.assertEqual(list(self.teste.glob("Relat*")), [])
 
     def test_parte_sem_nenhuma_tela_legivel_diz_quais_evidencias(self):
         for numero in (5, 6, 7, 8):
             (self.teste / f"{numero:02d}_tela.png").write_bytes(b"lixo")
         with self.assertRaises(ia_local.ErroIA) as erro:
-            self.gerar(FabricaEmSequencia(relato("Aprovado", "A"), relato("Aprovado", "B"), relato("Aprovado", "C"),
-                                          relato("Aprovado", "UNICO")))
+            self.gerar(FabricaPorPedido(self.respostas()))
         self.assertIn("evidências 5 a 8", str(erro.exception))
         self.assertEqual(list(self.teste.glob("Relat*")), [])
 

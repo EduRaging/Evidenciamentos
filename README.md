@@ -82,11 +82,13 @@ analisa **um de cada vez**, e a coluna **Relat.** mostra "…" no teste em andam
 Claude Code deste computador do mesmo jeito restrito dos ciclos (veja "Como o app chama o Claude",
 na seção Ciclos): **sem ferramenta nenhuma**, com as **telas reduzidas dentro do próprio pedido**, sem MCP
 nem skills. **Nenhuma tela fica de fora**: até 40 telas vão num pedido só; um teste maior é dividido em partes
-iguais e consecutivas (44 telas = 22 + 22), o Claude analisa uma parte de cada vez e uma última chamada, só com
-texto, junta tudo num relatório único (os casos numerados em sequência, e um fluxo que atravessa duas partes sai
-como um caso só). A linha de status mostra "parte 2 de 2" e "juntando as partes". Se só a junção falhar, o PDF
-sai mesmo assim, com as partes uma após a outra e um aviso no próprio texto. Com 44 telas o relatório leva
-cerca de 1,5 minuto (uns 30 s por parte e 40 s para juntar); até 40 telas continua em um pedido só. A IA devolve **só o texto** (os casos executados, o
+iguais e consecutivas (44 telas = 22 + 22) que o Claude analisa **ao mesmo tempo** (até 3 por vez), e uma última
+chamada, só com texto, junta tudo num relatório único (os casos numerados em sequência, e um fluxo que atravessa
+duas partes sai como um caso só). A linha de status mostra "em 2 partes ao mesmo tempo", "1 de 2 partes prontas"
+e "juntando as partes". Se uma parte falhar, as outras são interrompidas na hora (não se paga por um relatório que
+não sai); se só a junção falhar, o PDF sai mesmo assim, com as partes uma após a outra e um aviso no próprio
+texto. Com 44 telas o relatório leva cerca de 1 minuto (uns 30 s para as partes e 30 s para juntar); até 40
+telas continua em um pedido só. A IA devolve **só o texto** (os casos executados, o
 relatório de execução e o **status sugerido**: Aprovado, Reprovado ou Inconclusivo); **quem põe a
 capa, anexa as imagens e grava o PDF é o app**, na pasta do próprio teste (`Relatório de testes -
 <teste>.pdf` e o `.md`; nunca sobrescreve, o segundo vira `(2)`). O senhor vê só o andamento na linha
@@ -182,9 +184,11 @@ cobre o app nem o Claude Code. O modo restrito foi aceito pelo Claude Code insta
 20/10/2026 os dois fluxos foram exercitados com o Claude de verdade, só com telas fictícias geradas para o teste:
 o **relatório** (19 s com duas telas, e 53 s com 40) e o **roteiro** do ciclo (76 s, 17 casos validados e gravados
 pelo app, com as respostas citando telas até a 40). Em 21/10/2026 o relatório de um teste de **44 telas**, em duas
-partes e com a junção, foi feito do mesmo modo (84 a 102 s): os 9 casos saíram em sequência cobrindo as 44 telas, e
-as quatro telas que o limite antigo deixava de fora (6, 17, 28 e 39) foram lidas. Um teste grande faz **mais de uma
-chamada** ao Claude (uma por parte, mais a junção), todas com as mesmas restrições.
+partes e com a junção, foi feito do mesmo modo (84 a 102 s com as partes em sequência e 65 s com as partes ao mesmo
+tempo): os 9 casos saíram em sequência cobrindo as 44 telas, e as quatro telas que o limite antigo deixava de fora
+(6, 17, 28 e 39) foram lidas. Um teste grande faz **mais de uma chamada** ao Claude (uma por parte, mais a junção;
+as partes são processos `claude.exe` simultâneos, cada um na sua pasta temporária vazia), todas com as mesmas
+restrições.
 
 **Plano B (manual) e a extensão.** Pelo Claude desktop, a extensão ganhou a ferramenta `salvar_casos`,
 que só grava `roteiro-NNN.json` dentro de `_ciclos\<ciclo>`, só em pasta com `ciclo.json` válido, com
@@ -481,7 +485,7 @@ Inno Setup 6 instalado, o `build.bat` já o detecta e gera `installer_output\Set
 python -m unittest discover -s tests -t .
 ```
 
-São cerca de 420 testes (422 na versão 0.9.4; 40 deles só rodam com o pacote `mcp` instalado). Cobrem
+São cerca de 430 testes (433 na versão 0.9.5; 40 deles só rodam com o pacote `mcp` instalado). Cobrem
 a conversão de atalhos, nomes de pasta, a sessão (criar, remover, retomar, finalizar), a geração do PDF,
 os ciclos e a validação dos roteiros, o comando restrito do Claude Code e a leitura da resposta, o
 servidor MCP e as regressões da revisão de segurança.

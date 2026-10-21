@@ -17,8 +17,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
-from dataclasses import dataclass, replace
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -35,6 +37,7 @@ log = logging.getLogger(__name__)
 LADO_MAXIMO = 1568  # px, como na extensão: acima disso a IA reduz de qualquer jeito e só custa mais
 MAX_IMAGENS = 40  # por pedido; no roteiro, com vários testes, cada um entra com algumas telas espaçadas.
 # No relatório nenhuma tela fica de fora: um teste maior que isto é analisado em partes (`dividir_em_partes`).
+MAX_PARALELO = 3  # partes do relatório que o Claude analisa ao mesmo tempo (cada uma é um processo à parte)
 MIN_POR_TESTE = 3
 LIMITE_IMAGEM_BYTES = 400_000  # por tela dentro do pedido
 LIMITE_TOTAL_BYTES = 16_000_000  # soma das telas (o pedido todo aceita ~32 MB, e o base64 incha 1/3)
@@ -300,12 +303,30 @@ def extrair_resposta(saida: str) -> dict:
 
 @dataclass
 class Controle:
-    """Deixa outra thread cancelar uma geração em andamento."""
+    """Deixa outra thread cancelar uma geração em andamento.
+
+    Uma geração pode ter várias chamadas ao Claude ao mesmo tempo (as partes do relatório): cada uma recebe um controle
+    filho (`derivar`). Cancelar o pai cancela todos os filhos; cancelar um filho cancela só ele.
+    """
     processo: object | None = None
     cancelado: bool = False
+    filhos: list = field(default_factory=list, repr=False, compare=False)
+    _trava: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    def derivar(self) -> "Controle":
+        """Um controle para uma chamada que roda junto com outras; já nasce cancelado se o pai foi cancelado."""
+        filho = Controle()
+        with self._trava:
+            filho.cancelado = self.cancelado
+            self.filhos.append(filho)
+        return filho
 
     def cancelar(self) -> None:
-        self.cancelado = True
+        with self._trava:
+            self.cancelado = True
+            filhos = list(self.filhos)
+        for filho in filhos:
+            filho.cancelar()
         processo = self.processo
         if processo is not None:
             try:
@@ -328,6 +349,11 @@ def executar(exe: Path, entrada: str, pasta_de_trabalho: Path, controle: Control
     except OSError as exc:
         raise ErroIA("Não consegui iniciar o Claude Code deste computador.") from exc
     controle.processo = processo
+    if controle.cancelado:  # cancelado entre abrir o processo e guardá-lo: ninguém o teria encerrado
+        try:
+            processo.terminate()
+        except OSError:
+            pass
     try:
         saida, erro = processo.communicate(entrada, timeout=tempo_limite)
     except subprocess.TimeoutExpired as exc:
@@ -437,33 +463,77 @@ def _juntar_partes(teste: PastaTeste, relatos: list[ParteRelatorio], exe: Path, 
         return ParteRelatorio(primeira, ultima, _pior_status(relatos), "", f"{aviso}\n\n{corpo}")
 
 
+def _analisar_parte(teste: PastaTeste, k: int, total: int, grupo: list, exe: Path, controle: Controle | None,
+                    abrir_processo: Callable, tempo_limite: float) -> ParteRelatorio:
+    """Uma parte do teste: prepara as telas dela (só estas ficam na memória), pede ao Claude e devolve o relatório da parte."""
+    numeros = [e.numero for e in grupo]
+    if controle is not None and controle.cancelado:  # uma parte que ainda nem começou não gasta nada
+        raise Cancelado("Geração cancelada.")
+    telas = preparar_telas([replace(teste, evidencias=grupo)], max_imagens=len(grupo))
+    if not telas:
+        raise ErroIA("Não consegui preparar as telas do teste para enviar." if total == 1 else
+                     f"Não consegui preparar as telas das evidências {min(numeros)} a {max(numeros)} para enviar.")
+    parte = (k, total, numeros) if total > 1 else None
+    mensagem = montar_mensagem(montar_prompt_relatorio_local(teste, [t.numero for t in telas], parte), telas)
+    del telas
+    feito = _pedir_relatorio(exe, mensagem, controle, abrir_processo, tempo_limite)
+    return ParteRelatorio(min(numeros), max(numeros), feito["status"], feito["resumo"], feito["texto"])
+
+
+def _analisar_partes(teste: PastaTeste, grupos: list[list], exe: Path, controle: Controle | None,
+                     abrir_processo: Callable, tempo_limite: float, avisar: Callable[[str], None]) -> list[ParteRelatorio]:
+    """Os relatórios das partes, na ordem do teste. As partes rodam AO MESMO TEMPO (até MAX_PARALELO), uma chamada cada.
+
+    Se uma falhar, as outras são interrompidas na hora (não adianta pagar por um relatório que já não sai) e sobe o erro
+    da primeira que falhou. Se foi o usuário quem cancelou, sobe o cancelamento. `avisar` só é chamado por quem chamou
+    esta função (nunca pelas threads das partes).
+    """
+    total = len(grupos)
+    if total == 1:
+        return [_analisar_parte(teste, 1, 1, grupos[0], exe, controle, abrir_processo, tempo_limite)]
+    pai = controle or Controle()
+    simultaneas = min(total, MAX_PARALELO)
+    avisar(f"em {total} partes " + ("ao mesmo tempo" if simultaneas == total else f"({simultaneas} por vez)"))
+    filhos = [pai.derivar() for _ in grupos]
+    relatos: list[ParteRelatorio | None] = [None] * total
+    primeiro_erro: Exception | None = None
+    prontas = 0
+    with ThreadPoolExecutor(max_workers=simultaneas, thread_name_prefix="parte-relatorio") as pool:
+        futuros = {pool.submit(_analisar_parte, teste, k, total, grupo, exe, filho, abrir_processo, tempo_limite): k - 1
+                   for k, (grupo, filho) in enumerate(zip(grupos, filhos), 1)}
+        for futuro in as_completed(futuros):
+            try:
+                relatos[futuros[futuro]] = futuro.result()
+            except Exception as exc:  # noqa: BLE001 - qualquer falha de uma parte derruba as outras e sobe depois
+                if primeiro_erro is None:
+                    primeiro_erro = exc
+                    for filho in filhos:
+                        filho.cancelar()
+                continue
+            prontas += 1
+            if primeiro_erro is None:
+                avisar(f"{prontas} de {total} partes prontas")
+    if pai.cancelado:
+        raise Cancelado("Geração cancelada.")
+    if primeiro_erro is not None:
+        raise primeiro_erro
+    return [r for r in relatos if r is not None]
+
+
 def gerar_relatorio(pasta: Path | str, base: Path | str, exe: Path, controle: Controle | None = None,
                     abrir_processo: Callable = subprocess.Popen, tempo_limite: float = TEMPO_LIMITE_S,
                     progresso: Callable[[str], None] | None = None) -> dict:
     """Gera sozinho o relatório do teste em `pasta` e o grava em PDF na própria pasta. Devolve os dados do arquivo.
 
     As telas vão reduzidas, dentro do pedido, e TODAS são analisadas: até MAX_IMAGENS cabem num pedido só; um teste
-    maior é dividido em partes consecutivas, uma chamada por parte, e uma última chamada (só com texto) junta os
-    relatórios. A IA devolve só o texto: o app põe a capa, anexa as imagens e grava o PDF (nunca sobrescreve).
-    `progresso` recebe "parte 2 de 3" e "juntando as partes" (só quando há mais de uma parte). Levanta ErroIA.
+    maior é dividido em partes consecutivas, analisadas ao mesmo tempo (uma chamada por parte, até MAX_PARALELO), e uma
+    última chamada (só com texto) junta os relatórios. A IA devolve só o texto: o app põe a capa, anexa as imagens e
+    grava o PDF (nunca sobrescreve). `progresso` recebe "em 3 partes ao mesmo tempo", "1 de 3 partes prontas" e
+    "juntando as partes" (só quando há mais de uma parte); chamado sempre pela thread de quem chamou. Levanta ErroIA.
     """
     teste = _teste_da_base(pasta, base)
-    grupos = dividir_em_partes(teste.evidencias)
     avisar = progresso or (lambda _texto: None)
-    relatos: list[ParteRelatorio] = []
-    for k, grupo in enumerate(grupos, 1):
-        numeros = [e.numero for e in grupo]
-        if len(grupos) > 1:
-            avisar(f"parte {k} de {len(grupos)}")
-        telas = preparar_telas([replace(teste, evidencias=grupo)], max_imagens=len(grupo))
-        if not telas:
-            raise ErroIA("Não consegui preparar as telas do teste para enviar." if len(grupos) == 1 else
-                         f"Não consegui preparar as telas das evidências {min(numeros)} a {max(numeros)} para enviar.")
-        parte = (k, len(grupos), numeros) if len(grupos) > 1 else None
-        mensagem = montar_mensagem(montar_prompt_relatorio_local(teste, [t.numero for t in telas], parte), telas)
-        del telas  # só esta parte fica na memória
-        feito = _pedir_relatorio(exe, mensagem, controle, abrir_processo, tempo_limite)
-        relatos.append(ParteRelatorio(min(numeros), max(numeros), feito["status"], feito["resumo"], feito["texto"]))
+    relatos = _analisar_partes(teste, dividir_em_partes(teste.evidencias), exe, controle, abrir_processo, tempo_limite, avisar)
     if len(relatos) > 1:
         avisar("juntando as partes")
     final = relatos[0] if len(relatos) == 1 else _juntar_partes(teste, relatos, exe, controle, abrir_processo, tempo_limite)
