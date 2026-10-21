@@ -80,8 +80,13 @@ colando o PDF já copiado.
 Enter. Com **Ctrl** ou **Shift** o senhor seleciona **vários testes** (até 12 por vez); o app os
 analisa **um de cada vez**, e a coluna **Relat.** mostra "…" no teste em andamento. O app chama o
 Claude Code deste computador do mesmo jeito restrito dos ciclos (veja "Como o app chama o Claude",
-na seção Ciclos): **sem ferramenta nenhuma**, com as **telas reduzidas dentro do próprio pedido** (no
-máximo 40), sem MCP nem skills. A IA devolve **só o texto** (os casos executados, o
+na seção Ciclos): **sem ferramenta nenhuma**, com as **telas reduzidas dentro do próprio pedido**, sem MCP
+nem skills. **Nenhuma tela fica de fora**: até 40 telas vão num pedido só; um teste maior é dividido em partes
+iguais e consecutivas (44 telas = 22 + 22), o Claude analisa uma parte de cada vez e uma última chamada, só com
+texto, junta tudo num relatório único (os casos numerados em sequência, e um fluxo que atravessa duas partes sai
+como um caso só). A linha de status mostra "parte 2 de 2" e "juntando as partes". Se só a junção falhar, o PDF
+sai mesmo assim, com as partes uma após a outra e um aviso no próprio texto. Com 44 telas o relatório leva
+cerca de 1,5 minuto (uns 30 s por parte e 40 s para juntar); até 40 telas continua em um pedido só. A IA devolve **só o texto** (os casos executados, o
 relatório de execução e o **status sugerido**: Aprovado, Reprovado ou Inconclusivo); **quem põe a
 capa, anexa as imagens e grava o PDF é o app**, na pasta do próprio teste (`Relatório de testes -
 <teste>.pdf` e o `.md`; nunca sobrescreve, o segundo vira `(2)`). O senhor vê só o andamento na linha
@@ -123,7 +128,7 @@ jeito de sempre; daí em diante é **automático**, até a hora de executar e ev
 nenhuma** (nem leitura de arquivo), sem MCP, sem skills, sem ler as suas configurações, sem sessão salva, com
 tudo o que pediria permissão negado e com teto de gasto. As **telas vão reduzidas e dentro do próprio pedido**,
 na memória: nenhuma cópia delas é escrita no disco, e o Claude roda numa pasta temporária **vazia**, apagada ao
-fim (no máximo 40 telas, só PNGs de verdade e nada mais do teste; cada tela fica em até 400 KB, em PNG ou,
+fim (no roteiro, no máximo 40 telas por pedido; no relatório nenhuma fica de fora, veja acima. Só PNGs de verdade e nada mais do teste; cada tela fica em até 400 KB, em PNG ou,
 quando tem foto ou degradê e o PNG passa disso, em JPEG leve). Com as imagens no pedido o Claude responde numa
 volta só, em vez de abrir uma imagem por vez: com 40 telas, **29 s em vez de 75 s**, e mais barato. A IA devolve
 **só um JSON**; **o app valida e grava** o roteiro (a IA não escreve arquivo nenhum). Durante o trabalho a linha
@@ -176,7 +181,10 @@ controle positivo) cobriu só o **servidor da extensão** e não achou nenhuma t
 cobre o app nem o Claude Code. O modo restrito foi aceito pelo Claude Code instalado (versão 2.1.299). Em
 20/10/2026 os dois fluxos foram exercitados com o Claude de verdade, só com telas fictícias geradas para o teste:
 o **relatório** (19 s com duas telas, e 53 s com 40) e o **roteiro** do ciclo (76 s, 17 casos validados e gravados
-pelo app, com as respostas citando telas até a 40).
+pelo app, com as respostas citando telas até a 40). Em 21/10/2026 o relatório de um teste de **44 telas**, em duas
+partes e com a junção, foi feito do mesmo modo (84 a 102 s): os 9 casos saíram em sequência cobrindo as 44 telas, e
+as quatro telas que o limite antigo deixava de fora (6, 17, 28 e 39) foram lidas. Um teste grande faz **mais de uma
+chamada** ao Claude (uma por parte, mais a junção), todas com as mesmas restrições.
 
 **Plano B (manual) e a extensão.** Pelo Claude desktop, a extensão ganhou a ferramenta `salvar_casos`,
 que só grava `roteiro-NNN.json` dentro de `_ciclos\<ciclo>`, só em pasta com `ciclo.json` válido, com
@@ -473,7 +481,7 @@ Inno Setup 6 instalado, o `build.bat` já o detecta e gera `installer_output\Set
 python -m unittest discover -s tests -t .
 ```
 
-São cerca de 400 testes (397 na versão 0.9.3; 40 deles só rodam com o pacote `mcp` instalado). Cobrem
+São cerca de 420 testes (422 na versão 0.9.4; 40 deles só rodam com o pacote `mcp` instalado). Cobrem
 a conversão de atalhos, nomes de pasta, a sessão (criar, remover, retomar, finalizar), a geração do PDF,
 os ciclos e a validação dos roteiros, o comando restrito do Claude Code e a leitura da resposta, o
 servidor MCP e as regressões da revisão de segurança.

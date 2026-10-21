@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -26,10 +27,14 @@ from .ciclos import Ciclo
 from .imagens import reduzir_evidencia
 from .metadados import PastaTeste
 from .prompt_ciclo import montar_prompt_roteiro_local
-from .prompt_ia import STATUS_SUGERIDOS, montar_prompt_relatorio_local
+from .prompt_ia import (STATUS_SUGERIDOS, ParteRelatorio, montar_prompt_relatorio_local,
+                        montar_prompt_relatorio_unir)
+
+log = logging.getLogger(__name__)
 
 LADO_MAXIMO = 1568  # px, como na extensão: acima disso a IA reduz de qualquer jeito e só custa mais
-MAX_IMAGENS = 40  # por pedido; com vários testes, cada um entra com algumas telas espaçadas
+MAX_IMAGENS = 40  # por pedido; no roteiro, com vários testes, cada um entra com algumas telas espaçadas.
+# No relatório nenhuma tela fica de fora: um teste maior que isto é analisado em partes (`dividir_em_partes`).
 MIN_POR_TESTE = 3
 LIMITE_IMAGEM_BYTES = 400_000  # por tela dentro do pedido
 LIMITE_TOTAL_BYTES = 16_000_000  # soma das telas (o pedido todo aceita ~32 MB, e o base64 incha 1/3)
@@ -376,26 +381,93 @@ def _teste_da_base(pasta: Path | str, base: Path | str) -> PastaTeste:
     return teste
 
 
-def gerar_relatorio(pasta: Path | str, base: Path | str, exe: Path, controle: Controle | None = None,
-                    abrir_processo: Callable = subprocess.Popen, tempo_limite: float = TEMPO_LIMITE_S) -> dict:
-    """Gera sozinho o relatório do teste em `pasta` e o grava em PDF na própria pasta. Devolve os dados do arquivo.
+def dividir_em_partes(evidencias: list, maximo: int | None = None) -> list[list]:
+    """As evidências em trechos consecutivos, do mesmo tamanho e com até `maximo` (padrão: MAX_IMAGENS) cada.
 
-    As telas vão reduzidas, dentro do pedido. A IA devolve só o texto: o app põe a capa, anexa as imagens e grava o
-    PDF (nunca sobrescreve). Levanta ErroIA com a explicação.
+    É o que deixa o relatório olhar TODAS as telas: 44 viram 22 + 22, em vez de 40 espaçadas com 4 de fora.
     """
-    teste = _teste_da_base(pasta, base)
-    telas = preparar_telas([teste])
-    if not telas:
-        raise ErroIA("Não consegui preparar as telas do teste para enviar.")
-    mensagem = montar_mensagem(montar_prompt_relatorio_local(teste, [t.numero for t in telas]), telas)
+    maximo = MAX_IMAGENS if maximo is None else maximo
+    if not evidencias:
+        return []
+    quantas = -(-len(evidencias) // maximo)
+    tamanho = -(-len(evidencias) // quantas)
+    return [evidencias[i:i + tamanho] for i in range(0, len(evidencias), tamanho)]
+
+
+def _pior_status(relatos: list[ParteRelatorio]) -> str:
+    for status in ("Reprovado", "Inconclusivo", "Aprovado"):
+        if any(r.status == status for r in relatos):
+            return status
+    return "Inconclusivo"
+
+
+def _pedir_relatorio(exe: Path, mensagem: str, controle: Controle | None, abrir_processo: Callable,
+                     tempo_limite: float) -> dict:
+    """Uma chamada ao Claude, numa pasta temporária vazia (apagada no fim), que devolve status, resumo e texto do relatório."""
     with tempfile.TemporaryDirectory(prefix="capt_ia_") as vazia:
         bruto = executar(exe, mensagem, Path(vazia), controle, abrir_processo, tempo_limite, esquema=ESQUEMA_RELATORIO)
     texto = bruto.get("relatorio_markdown")
     if not isinstance(texto, str) or not texto.strip():
         raise ErroIA("O Claude não devolveu o texto do relatório; tente de novo.")
-    status = bruto.get("status_sugerido")
-    status = status if status in STATUS_SUGERIDOS else "Inconclusivo"
-    texto = f"**Status sugerido pela IA:** {status} (a decisão final é do testador).\n\n{texto.strip()}\n"
+    status, resumo = bruto.get("status_sugerido"), bruto.get("resumo")
+    return {"status": status if status in STATUS_SUGERIDOS else "Inconclusivo",
+            "resumo": resumo if isinstance(resumo, str) else "", "texto": texto.strip()}
+
+
+def _juntar_partes(teste: PastaTeste, relatos: list[ParteRelatorio], exe: Path, controle: Controle | None,
+                   abrir_processo: Callable, tempo_limite: float) -> ParteRelatorio:
+    """Os relatórios das partes num só. O Claude junta (chamada só com texto); se ele falhar, o app empilha as partes.
+
+    Falta de login e cancelamento seguem como estão. Qualquer outra falha não pode jogar fora o trabalho já feito:
+    o documento sai com as partes uma após a outra e um aviso, no próprio texto, de que não foram reunidas.
+    """
+    primeira, ultima = min(r.primeira for r in relatos), max(r.ultima for r in relatos)
+    try:
+        feito = _pedir_relatorio(exe, montar_mensagem(montar_prompt_relatorio_unir(teste, relatos), []), controle,
+                                 abrir_processo, tempo_limite)
+        return ParteRelatorio(primeira, ultima, feito["status"], feito["resumo"], feito["texto"])
+    except (Cancelado, NaoLogado):
+        raise
+    except ErroIA as exc:
+        log.warning("O Claude não reuniu as partes do relatório de %s: %s", teste.pasta.name, exc)
+        corpo = "\n\n---\n\n".join(f"# Parte {i} de {len(relatos)}: evidências {r.primeira} a {r.ultima}\n\n{r.markdown}"
+                                  for i, r in enumerate(relatos, 1))
+        aviso = (f"**Atenção:** o Claude não conseguiu reunir as {len(relatos)} partes num relatório só ({exc}). Abaixo estão "
+                 "os relatórios das partes, um após o outro; os IDs dos casos recomeçam em cada parte.")
+        return ParteRelatorio(primeira, ultima, _pior_status(relatos), "", f"{aviso}\n\n{corpo}")
+
+
+def gerar_relatorio(pasta: Path | str, base: Path | str, exe: Path, controle: Controle | None = None,
+                    abrir_processo: Callable = subprocess.Popen, tempo_limite: float = TEMPO_LIMITE_S,
+                    progresso: Callable[[str], None] | None = None) -> dict:
+    """Gera sozinho o relatório do teste em `pasta` e o grava em PDF na própria pasta. Devolve os dados do arquivo.
+
+    As telas vão reduzidas, dentro do pedido, e TODAS são analisadas: até MAX_IMAGENS cabem num pedido só; um teste
+    maior é dividido em partes consecutivas, uma chamada por parte, e uma última chamada (só com texto) junta os
+    relatórios. A IA devolve só o texto: o app põe a capa, anexa as imagens e grava o PDF (nunca sobrescreve).
+    `progresso` recebe "parte 2 de 3" e "juntando as partes" (só quando há mais de uma parte). Levanta ErroIA.
+    """
+    teste = _teste_da_base(pasta, base)
+    grupos = dividir_em_partes(teste.evidencias)
+    avisar = progresso or (lambda _texto: None)
+    relatos: list[ParteRelatorio] = []
+    for k, grupo in enumerate(grupos, 1):
+        numeros = [e.numero for e in grupo]
+        if len(grupos) > 1:
+            avisar(f"parte {k} de {len(grupos)}")
+        telas = preparar_telas([replace(teste, evidencias=grupo)], max_imagens=len(grupo))
+        if not telas:
+            raise ErroIA("Não consegui preparar as telas do teste para enviar." if len(grupos) == 1 else
+                         f"Não consegui preparar as telas das evidências {min(numeros)} a {max(numeros)} para enviar.")
+        parte = (k, len(grupos), numeros) if len(grupos) > 1 else None
+        mensagem = montar_mensagem(montar_prompt_relatorio_local(teste, [t.numero for t in telas], parte), telas)
+        del telas  # só esta parte fica na memória
+        feito = _pedir_relatorio(exe, mensagem, controle, abrir_processo, tempo_limite)
+        relatos.append(ParteRelatorio(min(numeros), max(numeros), feito["status"], feito["resumo"], feito["texto"]))
+    if len(relatos) > 1:
+        avisar("juntando as partes")
+    final = relatos[0] if len(relatos) == 1 else _juntar_partes(teste, relatos, exe, controle, abrir_processo, tempo_limite)
+    texto = f"**Status sugerido pela IA:** {final.status} (a decisão final é do testador).\n\n{final.markdown}\n"
     try:
         return gravacao.gravar_relatorio_pdf(teste, f"Relatório de testes - {teste.nome_teste}", texto, True)
     except ValueError as exc:

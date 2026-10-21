@@ -172,9 +172,12 @@ def _geracao_automatica() -> str:
     resposta = ia_local.extrair_resposta('{"is_error": false, "structured_output": {"casos": []}}')
     if "casos" not in resposta:
         raise AssertionError("resposta estruturada não lida")
+    partes = [len(p) for p in ia_local.dividir_em_partes(list(range(44)))]
+    if partes != [22, 22]:
+        raise AssertionError(f"44 telas deveriam ir em duas partes iguais, não em {partes}")
     achado = ia_local.localizar_claude()
     relatorio = _relatorio_automatico()
-    return (f"comando restrito sem ferramentas, telas reduzidas dentro do pedido e resposta; {relatorio}; Claude Code "
+    return (f"comando restrito sem ferramentas, telas reduzidas dentro do pedido e resposta; teste grande em partes; {relatorio}; Claude Code "
             f"{'encontrado' if achado else 'não encontrado (o app avisa e deixa o pedido manual em Mais ▾)'}")
 
 

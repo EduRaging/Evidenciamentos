@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -540,6 +541,197 @@ class GerarRelatorio(unittest.TestCase):
             self.gerar(ProcessoFalso(saida_ok(RELATORIO)))
         self.assertIn("preparar as telas", str(erro.exception))
 
+
+
+class FabricaEmSequencia:
+    """Substitui subprocess.Popen: cada chamada devolve o próximo processo falso (parte 1, parte 2... e a junção)."""
+
+    def __init__(self, *processos):
+        self.processos, self.chamadas = list(processos), []
+
+    def __call__(self, comando, **opcoes):
+        self.chamadas.append((comando, opcoes))
+        return self.processos[len(self.chamadas) - 1]
+
+
+def relato(status, texto):
+    return ProcessoFalso(saida_ok({"status_sugerido": status, "resumo": f"resumo de {texto}", "relatorio_markdown": texto}))
+
+
+def conteudo_do_pedido(processo):
+    return json.loads(processo.entrada)["message"]["content"]
+
+
+def telas_do_pedido(processo):
+    """Os números das evidências que foram dentro do pedido (os rótulos 'Evidência N:' que antecedem cada imagem)."""
+    return [int(re.search(r"\d+", c["text"]).group()) for c in conteudo_do_pedido(processo)
+            if c["type"] == "text" and c["text"].startswith("Evidência")]
+
+
+class DividirEmPartes(unittest.TestCase):
+    def test_o_teste_que_cabe_num_pedido_fica_numa_parte_so(self):
+        for quantas in (1, 3, ia_local.MAX_IMAGENS):
+            with self.subTest(quantas=quantas):
+                self.assertEqual(len(ia_local.dividir_em_partes(list(range(quantas)))), 1)
+        self.assertEqual(ia_local.dividir_em_partes([]), [])
+
+    def test_o_que_passa_do_limite_vira_partes_do_mesmo_tamanho(self):
+        tamanhos = {n: [len(p) for p in ia_local.dividir_em_partes(list(range(n)))] for n in (41, 44, 80, 81, 82, 200)}
+        self.assertEqual(tamanhos, {41: [21, 20], 44: [22, 22], 80: [40, 40], 81: [27, 27, 27], 82: [28, 28, 26],
+                                    200: [40] * 5})
+
+    def test_nenhuma_evidencia_fica_de_fora_nem_repete_e_a_ordem_se_mantem(self):
+        for n in range(1, 130):
+            partes = ia_local.dividir_em_partes(list(range(n)))
+            self.assertEqual([x for p in partes for x in p], list(range(n)), n)
+            self.assertTrue(all(len(p) <= ia_local.MAX_IMAGENS for p in partes), n)
+
+    def test_o_limite_pode_ser_trocado(self):
+        with mock.patch.object(ia_local, "MAX_IMAGENS", 4):
+            self.assertEqual([len(p) for p in ia_local.dividir_em_partes(list(range(10)))], [4, 4, 2])
+
+
+class GerarRelatorioEmPartes(unittest.TestCase):
+    """Teste com mais telas do que cabem num pedido: nenhuma fica de fora (partes, e uma chamada que junta)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.raiz = Path(self._tmp.name)
+        self.base = self.raiz / "Evidencias"
+        sessao = Sessao(self.raiz / "trab")
+        for _ in range(10):
+            sessao.adicionar(Image.new("RGB", (300, 200), "navy"), "tela")
+        self.teste = sessao.finalizar("Aprovadores", "QA", self.base)
+        limite = mock.patch.object(ia_local, "MAX_IMAGENS", 4)  # 10 telas: partes de 4, 4 e 2
+        limite.start()
+        self.addCleanup(limite.stop)
+
+    def gerar(self, fabrica, **extra):
+        return ia_local.gerar_relatorio(self.teste, self.base, Path("claude.exe"), abrir_processo=fabrica, **extra)
+
+    def partes(self):
+        return [relato("Aprovado", "TEXTO-A"), relato("Inconclusivo", "TEXTO-B"), relato("Aprovado", "TEXTO-C")]
+
+    def test_todas_as_telas_vao_uma_so_vez_e_com_o_numero_real(self):
+        partes, juncao = self.partes(), relato("Inconclusivo", "RELATORIO-UNICO")
+        fabrica = FabricaEmSequencia(*partes, juncao)
+        self.gerar(fabrica)
+        self.assertEqual([telas_do_pedido(p) for p in partes], [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10]])
+        self.assertEqual(len(fabrica.chamadas), 4)
+        self.assertIn("PARTE 2 de 3", conteudo_do_pedido(partes[1])[0]["text"])
+
+    def test_a_juncao_recebe_so_texto_com_as_tres_partes(self):
+        partes, juncao = self.partes(), relato("Inconclusivo", "RELATORIO-UNICO")
+        self.gerar(FabricaEmSequencia(*partes, juncao))
+        conteudo = conteudo_do_pedido(juncao)
+        self.assertEqual([c["type"] for c in conteudo], ["text"])  # nenhuma imagem na junção
+        for esperado in ("TEXTO-A", "TEXTO-B", "TEXTO-C", "evidências 1 a 4", "evidências 5 a 8", "evidências 9 a 10"):
+            self.assertIn(esperado, conteudo[0]["text"])
+
+    def test_o_relatorio_gravado_e_o_da_juncao_com_as_dez_imagens_anexadas(self):
+        dados = self.gerar(FabricaEmSequencia(*self.partes(), relato("Inconclusivo", "RELATORIO-UNICO")))
+        texto = (self.teste / dados["markdown"]).read_text(encoding="utf-8")
+        self.assertTrue(texto.startswith("**Status sugerido pela IA:** Inconclusivo"))
+        self.assertIn("RELATORIO-UNICO", texto)
+        self.assertNotIn("TEXTO-A", texto)
+        self.assertEqual(dados["evidencias_anexadas"], 10)
+        self.assertTrue((self.teste / dados["pdf"]).read_bytes().startswith(b"%PDF"))
+
+    def test_todas_as_chamadas_sao_restritas_e_sem_ferramentas(self):
+        fabrica = FabricaEmSequencia(*self.partes(), relato("Aprovado", "UNICO"))
+        self.gerar(fabrica)
+        for comando, opcoes in fabrica.chamadas:
+            self.assertEqual(comando[comando.index("--tools") + 1], "")
+            self.assertIn("relatorio_markdown", comando[comando.index("--json-schema") + 1])
+            self.assertIn("--restricted", comando)
+            self.assertFalse(Path(opcoes["cwd"]).exists())  # a pasta temporária de cada chamada some no fim
+
+    def test_o_andamento_diz_a_parte_e_depois_que_esta_juntando(self):
+        etapas = []
+        self.gerar(FabricaEmSequencia(*self.partes(), relato("Aprovado", "UNICO")), progresso=etapas.append)
+        self.assertEqual(etapas, ["parte 1 de 3", "parte 2 de 3", "parte 3 de 3", "juntando as partes"])
+
+    def test_se_cabe_num_pedido_nao_ha_partes_nem_juncao_nem_andamento(self):
+        etapas = []
+        with mock.patch.object(ia_local, "MAX_IMAGENS", 10):
+            processo = relato("Aprovado", "TEXTO-UNICO")
+            fabrica = FabricaEmSequencia(processo)
+            dados = self.gerar(fabrica, progresso=etapas.append)
+        self.assertEqual((len(fabrica.chamadas), etapas), (1, []))
+        self.assertEqual(telas_do_pedido(processo), list(range(1, 11)))
+        self.assertNotIn("PARTE", conteudo_do_pedido(processo)[0]["text"])
+        self.assertIn("TEXTO-UNICO", (self.teste / dados["markdown"]).read_text(encoding="utf-8"))
+
+    def test_tela_ilegivel_numa_parte_continua_marcada_so_nela(self):
+        (self.teste / "02_tela.png").write_bytes(b"lixo")
+        partes = self.partes()
+        with mock.patch.object(ia_local.gravacao, "gravar_relatorio_pdf", return_value={}):  # aqui só importa o pedido
+            self.gerar(FabricaEmSequencia(*partes, relato("Aprovado", "UNICO")))
+        self.assertEqual([telas_do_pedido(p) for p in partes], [[1, 3, 4], [5, 6, 7, 8], [9, 10]])
+        self.assertIn("2. Tela inteira", conteudo_do_pedido(partes[0])[0]["text"])
+        self.assertIn("→ NÃO enviada", conteudo_do_pedido(partes[0])[0]["text"])
+        self.assertNotIn("NÃO enviada", conteudo_do_pedido(partes[1])[0]["text"])
+
+    def test_se_o_claude_nao_junta_o_app_empilha_as_partes_e_avisa_no_documento(self):
+        for juncao in (ProcessoFalso("", "quebrou"),
+                       relato("Aprovado", "   "), ProcessoFalso("não é json")):
+            with self.subTest(juncao=juncao.stdout[:12]):
+                partes = [relato("Aprovado", "TEXTO-A"), relato("Reprovado", "TEXTO-B"), relato("Inconclusivo", "TEXTO-C")]
+                with self.assertLogs("capturador.ia_local", level="WARNING"):
+                    dados = self.gerar(FabricaEmSequencia(*partes, juncao))
+                texto = (self.teste / dados["markdown"]).read_text(encoding="utf-8")
+                self.assertTrue(texto.startswith("**Status sugerido pela IA:** Reprovado"))  # o pior das partes
+                self.assertIn("**Atenção:** o Claude não conseguiu reunir as 3 partes", texto)
+                for esperado in ("# Parte 1 de 3: evidências 1 a 4", "# Parte 3 de 3: evidências 9 a 10",
+                                 "TEXTO-A", "TEXTO-B", "TEXTO-C"):
+                    self.assertIn(esperado, texto)
+                self.assertEqual(dados["evidencias_anexadas"], 10)
+
+    def test_o_status_do_teste_na_falha_da_juncao_e_inconclusivo_sem_reprovada(self):
+        partes = [relato("Aprovado", "A"), relato("Aprovado", "B"), relato("Inconclusivo", "C")]
+        with self.assertLogs("capturador.ia_local", level="WARNING"):
+            dados = self.gerar(FabricaEmSequencia(*partes, ProcessoFalso("", "quebrou")))
+        self.assertTrue((self.teste / dados["markdown"]).read_text(encoding="utf-8").startswith(
+            "**Status sugerido pela IA:** Inconclusivo"))
+
+    def test_sem_login_na_juncao_nao_grava_nada(self):
+        saida = json.dumps({"type": "result", "is_error": True, "result": "Not logged in · Please run /login"})
+        with self.assertRaises(ia_local.NaoLogado):
+            self.gerar(FabricaEmSequencia(*self.partes(), ProcessoFalso(saida)))
+        self.assertEqual(list(self.teste.glob("Relat*")), [])
+
+    def test_cancelar_entre_as_partes_para_na_hora_e_nao_grava_nada(self):
+        controle = ia_local.Controle()
+        partes = self.partes()
+
+        class Cancela(FabricaEmSequencia):
+            def __call__(self, comando, **opcoes):
+                processo = super().__call__(comando, **opcoes)
+                controle.cancelar()  # o usuário cancela durante a primeira parte
+                return processo
+
+        fabrica = Cancela(*partes, relato("Aprovado", "UNICO"))
+        with self.assertRaises(ia_local.Cancelado):
+            self.gerar(fabrica, controle=controle)
+        self.assertEqual(len(fabrica.chamadas), 1)
+        self.assertEqual(list(self.teste.glob("Relat*")), [])
+
+    def test_falha_numa_parte_derruba_o_relatorio_sem_gravar_pela_metade(self):
+        fabrica = FabricaEmSequencia(relato("Aprovado", "TEXTO-A"), ProcessoFalso("", "quebrou"), relato("Aprovado", "C"))
+        with self.assertRaises(ia_local.ErroIA):
+            self.gerar(fabrica)
+        self.assertEqual(len(fabrica.chamadas), 2)
+        self.assertEqual(list(self.teste.glob("Relat*")), [])
+
+    def test_parte_sem_nenhuma_tela_legivel_diz_quais_evidencias(self):
+        for numero in (5, 6, 7, 8):
+            (self.teste / f"{numero:02d}_tela.png").write_bytes(b"lixo")
+        with self.assertRaises(ia_local.ErroIA) as erro:
+            self.gerar(FabricaEmSequencia(relato("Aprovado", "A"), relato("Aprovado", "B"), relato("Aprovado", "C"),
+                                          relato("Aprovado", "UNICO")))
+        self.assertIn("evidências 5 a 8", str(erro.exception))
+        self.assertEqual(list(self.teste.glob("Relat*")), [])
 
 
 class EsperarOLogin(unittest.TestCase):

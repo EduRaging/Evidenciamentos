@@ -464,17 +464,17 @@ class App:
                 f"evidencias.json está inválido), então ficaram de fora:\n\n{lista}", parent=self.raiz)
         if not testes:
             return
-        telas = min(ia_local.MAX_IMAGENS, sum(len(t.evidencias) for t in testes))
+        telas = sum(len(t.evidencias) for t in testes)  # no relatório nenhuma tela fica de fora (teste grande vai em partes)
         exe = self._pronto_para_ia(self._status_relatorio, telas, "o nome, o testador e as datas dos testes",
                                    lambda: self._gerar_relatorios(pastas))
         if exe is None:
             return
         controle = ia_local.Controle()
+        atual = f"O Claude está analisando {'o teste' if len(testes) == 1 else f'{len(testes)} testes'}"
         self._lote = {"controle": controle, "pendentes": {t.pasta for t in testes}, "prontos": 0, "falhas": [],
-                      "nao_logado": False, "total": len(testes)}
+                      "nao_logado": False, "total": len(testes), "atual": atual}
         self.painel_pdfs.marcar_gerando(self._lote["pendentes"])
-        self._acompanhar("relatorios", f"O Claude está analisando {'o teste' if len(testes) == 1 else f'{len(testes)} testes'}…"
-                         " o app continua livre para capturar", self._status_relatorio)
+        self._acompanhar("relatorios", f"{atual}… o app continua livre para capturar", self._status_relatorio)
         base = self.cfg.pasta_base
 
         def trabalho() -> None:  # thread: nada de Tk aqui, só devolve o resultado pela fila
@@ -483,7 +483,10 @@ class App:
                     break
                 self._fila_ia.put(("relatorio", "andamento", teste, i, ""))
                 try:
-                    dados = ia_local.gerar_relatorio(teste.pasta, base, exe, controle)
+                    # teste com mais telas do que cabem num pedido vai em partes: a linha de status diz em qual está
+                    dados = ia_local.gerar_relatorio(
+                        teste.pasta, base, exe, controle,
+                        progresso=lambda etapa, t=teste: self._fila_ia.put(("relatorio", "etapa", t, etapa, "")))
                     self._fila_ia.put(("relatorio", "ok", teste, dados, ""))
                 except ia_local.Cancelado:
                     break
@@ -604,8 +607,14 @@ class App:
         if lote is None:
             return
         if resultado == "andamento":
-            if lote["total"] > 1 and "relatorios" in self._andamento and not lote["controle"].cancelado:
-                self._andamento["relatorios"] = f"O Claude está analisando o teste {valor} de {lote['total']}: {teste.nome_teste}…"
+            if lote["total"] > 1:
+                lote["atual"] = f"O Claude está analisando o teste {valor} de {lote['total']}: {teste.nome_teste}"
+                if "relatorios" in self._andamento and not lote["controle"].cancelado:
+                    self._andamento["relatorios"] = f"{lote['atual']}…"
+            return
+        if resultado == "etapa":  # "parte 2 de 3" / "juntando as partes", só nos testes divididos em partes
+            if "relatorios" in self._andamento and not lote["controle"].cancelado:
+                self._andamento["relatorios"] = f"{lote['atual']}, {valor}…"
             return
         if resultado in ("ok", "erro", "nao_logado"):
             lote["pendentes"].discard(teste.pasta)
